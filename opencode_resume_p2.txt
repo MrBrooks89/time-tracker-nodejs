@@ -1,0 +1,2 @@
+Session   Phase 2 planning: employees, time entries, reports
+  Continue  opencode -s ses_f9c3cf290ffeVisLcYYIWxxICt
