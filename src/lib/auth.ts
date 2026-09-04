@@ -21,7 +21,9 @@ export const auth = betterAuth({
   // the request-specific base URL from the incoming Host header. Entries are
   // automatically added to trustedOrigins, so sign-in from the LAN IP passes the
   // origin check. Explicit protocol keeps cookies non-Secure in dev (plain HTTP).
-  baseURL: process.env.BETTER_AUTH_URL ?? {
+  // Set explicitly (never via the BETTER_AUTH_URL env var) so stray .env values
+  // cannot override the allowlist. Add the production domain when deploying.
+  baseURL: {
     allowedHosts: ["localhost:3000", "192.168.4.112:3000"],
     protocol: process.env.NODE_ENV === "development" ? "http" : "https",
   },
