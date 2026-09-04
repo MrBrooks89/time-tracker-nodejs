@@ -8,6 +8,7 @@ import {
   getActualsReport,
   getClassificationReport,
   getComplianceReport,
+  getSpendDashboard,
   resolveScope,
 } from "@/lib/reports";
 
@@ -125,7 +126,7 @@ export async function GET(request: Request) {
       },
     ];
   } else if (tab === "compliance") {
-    const rows = await getComplianceReport(scopeData.scope);
+    const rows = await getComplianceReport(viewer, scopeData.scope);
     filenameTab = "compliance";
     sheets = [
       {
@@ -185,9 +186,41 @@ export async function GET(request: Request) {
         })),
       },
     ];
+  } else if (tab === "dashboard") {
+    const data = await getSpendDashboard(viewer, filters);
+    filenameTab = "time-spend";
+    sheets = [
+      {
+        name: "Trend",
+        rows: data.trend.map((t) => ({
+          period: t.label,
+          project_hours: round(t.projectHours),
+          support_hours: round(t.supportHours),
+          total: round(t.total),
+        })),
+      },
+      {
+        name: "By team",
+        rows: data.byTeam.map((r) => ({
+          team: r.team,
+          project_hours: round(r.projectHours),
+          support_hours: round(r.supportHours),
+          total: round(r.total),
+        })),
+      },
+      {
+        name: "By manager",
+        rows: data.byManager.map((r) => ({
+          manager: r.manager,
+          project_hours: round(r.projectHours),
+          support_hours: round(r.supportHours),
+          total: round(r.total),
+        })),
+      },
+    ];
   } else {
     return NextResponse.json(
-      { error: "This report has no export — use Actuals, Compliance, or Classification." },
+      { error: "This report has no export — use Dashboard, Actuals, Compliance, or Classification." },
       { status: 400 },
     );
   }

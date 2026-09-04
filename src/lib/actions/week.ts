@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 import { db } from "@/db";
@@ -231,25 +231,30 @@ export async function saveWeek(input: SaveWeekInput): Promise<ActionResult> {
     }
   }
 
-  await db.delete(timeEntryTable).where(eq(timeEntryTable.timesheetId, sheet.id));
+  // Sync callback + .run(): better-sqlite3 transactions reject promise-returning
+  // callbacks, so all statements execute synchronously inside the tx.
+  db.transaction((tx) => {
+    tx.delete(timeEntryTable).where(eq(timeEntryTable.timesheetId, sheet.id)).run();
 
-  if (inserts.length > 0) {
-    await db.insert(timeEntryTable).values(
-      inserts.map((entry) => ({
-        id: crypto.randomUUID(),
-        timesheetId: sheet.id,
-        ...entry,
-      })),
-    );
-  }
+    if (inserts.length > 0) {
+      tx.insert(timeEntryTable).values(
+        inserts.map((entry) => ({
+          id: crypto.randomUUID(),
+          timesheetId: sheet.id,
+          ...entry,
+        })),
+      ).run();
+    }
 
-  await db
-    .update(timesheetTable)
-    .set({
-      state: "in_progress",
-      submittedAt: null,
-    })
-    .where(eq(timesheetTable.id, sheet.id));
+    tx
+      .update(timesheetTable)
+      .set({
+        state: "in_progress",
+        submittedAt: null,
+      })
+      .where(eq(timesheetTable.id, sheet.id))
+      .run();
+  });
 
   revalidateWeekPaths();
   return { ok: true };
@@ -261,8 +266,19 @@ export async function submitWeek(weekStartDate: string): Promise<ActionResult> {
   const weekError = await validateInputWeek(weekStartDate);
   if (weekError) return weekError;
 
-  const sheet = await getOrCreateSheet(sessionUser.id, weekStartDate);
-  if (!sheet) return { ok: false, error: "Could not open timesheet." };
+  // Read-only lookup: submitting must never create a phantom in_progress
+  // sheet for an empty week (compliance status stays not_started).
+  const [sheet] = await db
+    .select({ id: timesheetTable.id, state: timesheetTable.state })
+    .from(timesheetTable)
+    .where(
+      and(
+        eq(timesheetTable.userId, sessionUser.id),
+        eq(timesheetTable.weekStartDate, weekStartDate),
+      ),
+    )
+    .limit(1);
+  if (!sheet) return { ok: false, error: "Add hours before submitting." };
   if (sheet.state === "locked") {
     return { ok: false, error: "This week is locked." };
   }
@@ -379,13 +395,18 @@ export async function copyPriorWeek(weekStartDate: string): Promise<ActionResult
     };
   }
 
-  await db.delete(timeEntryTable).where(eq(timeEntryTable.timesheetId, sheet.id));
-  await db.insert(timeEntryTable).values(inserts);
+  // Sync callback + .run(): better-sqlite3 transactions reject promise-returning
+  // callbacks, so all statements execute synchronously inside the tx.
+  db.transaction((tx) => {
+    tx.delete(timeEntryTable).where(eq(timeEntryTable.timesheetId, sheet.id)).run();
+    tx.insert(timeEntryTable).values(inserts).run();
 
-  await db
-    .update(timesheetTable)
-    .set({ state: "in_progress", submittedAt: null })
-    .where(eq(timesheetTable.id, sheet.id));
+    tx
+      .update(timesheetTable)
+      .set({ state: "in_progress", submittedAt: null })
+      .where(eq(timesheetTable.id, sheet.id))
+      .run();
+  });
 
   revalidateWeekPaths();
   return { ok: true };
@@ -464,9 +485,14 @@ export async function simulateClose(weekStartDate: string): Promise<ActionResult
 export async function unlockWeek(weekStartDate: string): Promise<ActionResult> {
   await requirePeopleManager();
 
+  // simulateClose locks every sheet in the week (including never-submitted
+  // ones), so restore per-sheet state from evidence: submittedAt proves a real
+  // submission; anything else was in_progress before the lock.
   await db
     .update(timesheetTable)
-    .set({ state: "submitted" })
+    .set({
+      state: sql`CASE WHEN ${timesheetTable.submittedAt} IS NULL THEN 'in_progress' ELSE 'submitted' END`,
+    })
     .where(
       and(
         eq(timesheetTable.weekStartDate, weekStartDate),

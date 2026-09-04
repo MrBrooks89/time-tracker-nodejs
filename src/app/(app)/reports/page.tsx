@@ -443,7 +443,8 @@ async function ReportsBody({
   }
 
   if (tab === "compliance") {
-    const rows = await getComplianceReport(scopeData.scope);
+    const rows = await getComplianceReport(viewer, scopeData.scope);
+    const outstanding = rows.filter((r) => r.state !== "submitted" && r.state !== "locked");
     return (
       <div className="flex flex-col gap-6">
         <Card className="animate-scale-in">
@@ -459,12 +460,18 @@ async function ReportsBody({
             <p className="micro-label">Compliance / Submission</p>
             <CardTitle className="flex items-center gap-3">
               Timesheet compliance
-              <Badge variant="secondary">{rows.length} rows</Badge>
+              <Badge variant="secondary">{outstanding.length} outstanding</Badge>
             </CardTitle>
           </CardHeader>
           <CardContent>
             {rows.length === 0 ? (
               <EmptyState message="NO TIMESHEETS IN RANGE" />
+            ) : outstanding.length === 0 ? (
+              <div className="blueprint-surface flex min-h-24 items-center justify-center rounded-xl p-8">
+                <p className="text-sm text-muted-foreground">
+                  All timesheets in range are submitted or locked.
+                </p>
+              </div>
             ) : (
               <Table>
                 <TableHeader>
@@ -477,8 +484,7 @@ async function ReportsBody({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {rows
-                    .filter((r) => r.state !== "submitted" && r.state !== "locked")
+                  {outstanding
                     .slice(0, 30)
                     .map((row) => (
                       <TableRow key={`${row.userId}-${row.weekStartDate}`}>

@@ -43,3 +43,6 @@ next-env.d.ts
 # database
 /data
 *.db
+
+# agent session/task scratch space
+/.tmp

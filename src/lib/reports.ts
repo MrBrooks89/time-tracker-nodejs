@@ -1,4 +1,5 @@
 import { and, asc, eq, gte, inArray, isNotNull, lte, sql, type SQL } from "drizzle-orm";
+import { alias } from "drizzle-orm/sqlite-core";
 
 import { db } from "@/db";
 import {
@@ -13,9 +14,14 @@ import {
   FISCAL_PERIODS,
   currentWeek,
   findPeriod,
+  isWeekStart,
   weekDates,
 } from "@/lib/fiscal";
 import type { SessionUser } from "@/lib/session";
+
+// Aliased users table so entries can join the entry owner's manager
+// without clashing with the primary userTable join.
+const managerUser = alias(userTable, "manager_user");
 
 export type ReportScope =
   | { kind: "week"; weekStartDate: string }
@@ -38,6 +44,7 @@ export function resolveScope(params: {
   quarter?: string;
 }): { scope: ReportScope; label: string; from: string; to: string } | null {
   if (params.week) {
+    if (!isWeekStart(params.week)) return null;
     const period = findPeriod(params.week);
     if (!period) return null;
     return {
@@ -159,6 +166,8 @@ export interface ReportEntryRow {
   id: string;
   userName: string;
   team: string | null;
+  managerId: string | null;
+  managerName: string | null;
   projectName: string | null;
   taskCodeName: string | null;
   categoryName: string | null;
@@ -206,6 +215,8 @@ export async function getReportEntries(
       id: timeEntryTable.id,
       userName: userTable.name,
       team: userTable.team,
+      managerId: managerUser.id,
+      managerName: managerUser.name,
       projectName: projectTable.name,
       taskCodeName: taskCodeTable.name,
       categoryName: categoryTable.name,
@@ -216,6 +227,7 @@ export async function getReportEntries(
     .from(timeEntryTable)
     .innerJoin(timesheetTable, eq(timeEntryTable.timesheetId, timesheetTable.id))
     .innerJoin(userTable, eq(timesheetTable.userId, userTable.id))
+    .leftJoin(managerUser, eq(userTable.managerId, managerUser.id))
     .leftJoin(projectTable, eq(timeEntryTable.projectId, projectTable.id))
     .leftJoin(taskCodeTable, eq(timeEntryTable.taskCodeId, taskCodeTable.id))
     .leftJoin(categoryTable, eq(timeEntryTable.nonProjectCategoryId, categoryTable.id))
@@ -345,6 +357,7 @@ export interface ComplianceReportRow {
 }
 
 export async function getComplianceReport(
+  viewer: SessionUser,
   scope: ReportScope,
 ): Promise<ComplianceReportRow[]> {
   let weeks: string[];
@@ -360,11 +373,17 @@ export async function getComplianceReport(
     }
   }
 
+  // Employees only see their own submission status; managers/admins see all active users.
+  const userConditions = [eq(userTable.isActive, true)];
+  if (viewer.role === "employee") {
+    userConditions.push(eq(userTable.id, viewer.id));
+  }
+
   const [users, sheets, totals] = await Promise.all([
     db
       .select({ id: userTable.id, name: userTable.name, team: userTable.team })
       .from(userTable)
-      .where(eq(userTable.isActive, true))
+      .where(and(...userConditions))
       .orderBy(asc(userTable.name)),
     db
       .select({
@@ -558,33 +577,22 @@ export async function getSpendDashboard(
     }
     teamRows.sort((a, b) => b.total - a.total);
 
-    const managerRowsRaw = await db
-      .select({
-        managerId: userTable.managerId,
-        managerName: userTable.name,
-        hours: sql<number>`sum(${timeEntryTable.hours})`,
-      })
-      .from(timeEntryTable)
-      .innerJoin(timesheetTable, eq(timeEntryTable.timesheetId, timesheetTable.id))
-      .innerJoin(userTable, eq(timesheetTable.userId, userTable.id))
-      .innerJoin(
-        db.select({ id: userTable.id, name: userTable.name }).from(userTable).as("manager"),
-        sql`${userTable.managerId} = manager.id`,
-      )
-      .where(
-        and(
-          gte(timeEntryTable.entryDate, scopeToDates(latestScope).from),
-          lte(timeEntryTable.entryDate, scopeToDates(latestScope).to),
-        ),
-      )
-      .groupBy(userTable.managerId, userTable.name);
-
-    for (const row of managerRowsRaw) {
+    // Group the same viewer-scoped entries by manager, mirroring the team
+    // grouping above so employees never see other managers' team totals.
+    const managerMap = new Map<string, { projectHours: number; supportHours: number }>();
+    for (const e of entries) {
+      const key = e.managerName ?? "Unassigned";
+      const row = managerMap.get(key) ?? { projectHours: 0, supportHours: 0 };
+      if (e.projectName !== null) row.projectHours += e.hours;
+      else row.supportHours += e.hours;
+      managerMap.set(key, row);
+    }
+    for (const [manager, row] of managerMap) {
       managerRows.push({
-        manager: row.managerName,
-        projectHours: 0,
-        supportHours: 0,
-        total: Math.round(Number(row.hours) * 4) / 4,
+        manager,
+        projectHours: Math.round(row.projectHours * 4) / 4,
+        supportHours: Math.round(row.supportHours * 4) / 4,
+        total: Math.round((row.projectHours + row.supportHours) * 4) / 4,
       });
     }
     managerRows.sort((a, b) => b.total - a.total);
@@ -647,8 +655,14 @@ export async function getReportOptions(): Promise<ReportOptions> {
 }
 
 export function csvEscape(value: string): string {
-  if (/[",\n\r]/.test(value)) {
-    return `"${value.replace(/"/g, '""')}"`;
+  // Guard against CSV formula injection (=, +, -, @ prefixes) while leaving
+  // plain numbers (including negative decimals like -0.25) untouched.
+  const guarded =
+    /^[=+\-@]/.test(value) && !/^-?\d+(\.\d+)?$/.test(value)
+      ? `'${value}`
+      : value;
+  if (/[",\n\r]/.test(guarded)) {
+    return `"${guarded.replace(/"/g, '""')}"`;
   }
-  return value;
+  return guarded;
 }

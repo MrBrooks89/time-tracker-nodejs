@@ -94,11 +94,11 @@ export function WeekGrid(props: WeekGridProps) {
   );
 
   const variance: "met" | "below" | "over" =
-    weeklyTotal >= props.expectedHours - 0.001 && weeklyTotal <= props.expectedHours * 1.25
-      ? "met"
-      : weeklyTotal < props.expectedHours
-        ? "below"
-        : "over";
+    weeklyTotal < props.expectedHours - 0.001
+      ? "below"
+      : weeklyTotal > props.expectedHours + 0.001
+        ? "over"
+        : "met";
 
   const holidayAdjusted = props.expectedHours !== props.standardWeeklyHours;
 
