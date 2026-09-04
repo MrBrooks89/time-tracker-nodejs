@@ -10,6 +10,7 @@
     "test": "node --test --experimental-strip-types src/lib/*.test.ts",
     "seed": "node --env-file=.env --experimental-strip-types src/db/seed.ts",
     "dataset": "node scripts/generate-dataset.cjs",
+    "smoke": "node scripts/smoke-tests.cjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },
@@ -35,6 +36,7 @@
     "drizzle-kit": "^0.31.10",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
+    "playwright": "^1.62.1",
     "tailwindcss": "^4",
     "typescript": "^5"
   }

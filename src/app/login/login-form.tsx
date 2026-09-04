@@ -10,9 +10,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 const demoAccounts = [
-  { email: "admin@timetracker.dev", password: "admin1234" },
-  { email: "manager@timetracker.dev", password: "manager1234" },
-  { email: "employee@timetracker.dev", password: "employee1234" },
+  { label: "Admin", email: "aaron.alvarez@hackathon.com" },
+  { label: "Manager", email: "fatima.kim@hackathon.com" },
+  { label: "Employee", email: "ana.bell@hackathon.com" },
 ];
 
 export function LoginForm() {
@@ -70,7 +70,7 @@ export function LoginForm() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@timetracker.dev"
+                placeholder="you@hackathon.com"
               />
             </div>
             <div className="flex flex-col gap-2">
@@ -97,10 +97,13 @@ export function LoginForm() {
 
           <div className="blueprint-surface flex flex-col gap-2 p-4">
             <p className="micro-label">Demo Access</p>
+            <p className="text-xs text-muted-foreground">
+              Shared password: <span className="font-mono">hackathon2026</span>
+            </p>
             <ul className="flex flex-col gap-1.5 font-mono text-xs text-muted-foreground">
               {demoAccounts.map((account) => (
                 <li key={account.email}>
-                  {account.email} / {account.password}
+                  {account.label}: {account.email}
                 </li>
               ))}
             </ul>
