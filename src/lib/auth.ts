@@ -17,7 +17,14 @@ export const auth = betterAuth({
   secret:
     process.env.BETTER_AUTH_SECRET ??
     "dev-only-secret-change-me-in-production-0123456789",
-  baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
+  // Dynamic baseURL: accepts requests from any of the allowed hosts and derives
+  // the request-specific base URL from the incoming Host header. Entries are
+  // automatically added to trustedOrigins, so sign-in from the LAN IP passes the
+  // origin check. Explicit protocol keeps cookies non-Secure in dev (plain HTTP).
+  baseURL: process.env.BETTER_AUTH_URL ?? {
+    allowedHosts: ["localhost:3000", "192.168.4.112:3000"],
+    protocol: process.env.NODE_ENV === "development" ? "http" : "https",
+  },
   user: {
     additionalFields: {
       role: {
