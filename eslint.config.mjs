@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Standalone Node tooling (CommonJS), not app code:
     "scripts/**",
+    // Session/task scratch space (E2E harnesses, plans):
+    ".tmp/**",
   ]),
 ]);
 

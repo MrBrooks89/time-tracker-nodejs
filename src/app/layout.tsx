@@ -23,7 +23,7 @@ const plexMono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "Time Tracker",
   description:
-    "Employee time tracking for teams — clock in, log hours, and stay on schedule.",
+    "Employee time tracking for teams — log hours by fiscal week, submit timesheets, and report on IT time spend.",
 };
 
 export default function RootLayout({
