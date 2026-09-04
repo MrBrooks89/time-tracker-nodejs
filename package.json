@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test": "node --test --experimental-strip-types src/lib/*.test.ts",
     "seed": "node --env-file=.env --experimental-strip-types src/db/seed.ts",
+    "dataset": "node scripts/generate-dataset.cjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },
