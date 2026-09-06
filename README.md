@@ -10,7 +10,11 @@ across a 4-4-5 fiscal calendar.
 - **Weekly timesheets** — grid entry per day with project/task-code or non-project
   categories, hands-on flags, and notes
 - **Favorites** — pin project/task-code combos for quick entry in the week grid
-- **Timesheet state machine** — `not_started → in_progress → submitted → in_correction → locked`
+- **Timesheet state machine** — `not_started → in_progress → submitted → in_correction → approved → locked`
+- **Approval workflow** — managers/admins review submitted weeks in an approval queue;
+  rejection sends the sheet back to the partner for correction. No self-approval —
+  managers' own sheets and unmanaged partners route to admin. Every decision is kept
+  in an insert-only audit trail
 - **Capex/opex classification** — task-code rules resolve each entry's classification,
   with effective dates
 - **Fiscal calendar** — FY26–FY27 4-4-5-style periods (12 periods/year) with holiday
@@ -19,8 +23,9 @@ across a 4-4-5 fiscal calendar.
   project assignments
 - **Reports** — Time Spend, Period Actuals, Compliance, and CapEx/Opex tabs, each
   exportable as CSV or XLSX
-- **Period close** — admins can simulate a period close (locking all timesheets for a
-  week) or unlock a week
+- **Period close cycle** — admins initiate a fiscal-period close: exception report
+  (unsubmitted weeks, hours outliers) → correction window (5 business days) → finalize
+  (sheets lock) → reopen if needed
 
 ## Tech Stack
 
@@ -91,23 +96,29 @@ All seeded accounts share the password `hackathon2026`.
 
 ## Environment Variables
 
-All optional for local development; defaults are dev-only.
+Optional for local development; defaults are dev-only.
 
 | Variable             | Purpose                          | Default                        |
 | -------------------- | -------------------------------- | ------------------------------ |
 | `BETTER_AUTH_SECRET` | Auth session signing secret      | Dev-only fallback (insecure)   |
-| `BETTER_AUTH_URL`   | Base URL for auth callbacks      | `http://localhost:3000`        |
 
 Set a real `BETTER_AUTH_SECRET` for anything beyond local development.
+
+The dev server also accepts requests from LAN IPs (`http://192.168.x.x:3000`) —
+useful when testing from another device on your network. Auth origins are
+configured in `src/lib/auth.ts` (`allowedHosts`); add your production domain
+there when deploying.
 
 ## Testing
 
 ```bash
-# Unit tests (fiscal calendar, holidays, classification, entry validation)
+# Unit tests (fiscal calendar, holidays, classification, entry validation,
+# approval workflow, period close)
 npm run test
 
 # Smoke tests — run `npm run seed` and `npm run dev` first, then:
-npm run smoke
+npm run smoke              # Phase 2: timesheet entry + submission scenarios
+node scripts/phase4-smoke.cjs  # Phase 4: approval workflow + period close
 ```
 
 Smoke tests create and clean up their own test data (a smoke employee and project).
@@ -117,12 +128,14 @@ Smoke tests create and clean up their own test data (a smoke employee and projec
 ```
 src/
   app/
-    (app)/            # Authenticated pages: dashboard, week, employees, projects, reports
+    (app)/            # Authenticated pages: dashboard, week, approvals, close,
+                      # employees, projects, reports
     login/            # Sign-in page
     api/auth/         # better-auth route handlers
   components/         # Nav, theme provider, UI primitives (button, table, etc.)
   db/                 # Drizzle client, schema, seed script
-  lib/                # Domain logic: fiscal, holidays, classification, reports, permissions
+  lib/                # Domain logic: fiscal, holidays, classification, reports,
+                      # permissions, approval, close
 scripts/              # Dataset generator + Playwright smoke tests
 drizzle/              # Generated migrations
 ```
