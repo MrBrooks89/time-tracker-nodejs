@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, isNull, lte } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -11,6 +11,7 @@ import {
   classificationRule as ruleTable,
   timeEntry as timeEntryTable,
   timesheet as timesheetTable,
+  timesheetDecision as decisionTable,
   user as userTable,
 } from "@/db/schema";
 import {
@@ -67,8 +68,17 @@ export interface WeekData {
   week: FiscalWeekInfo;
   weekStartDate: string;
   dates: string[];
-  state: "not_started" | "in_progress" | "submitted" | "in_correction" | "locked";
+  state:
+    | "not_started"
+    | "in_progress"
+    | "submitted"
+    | "in_correction"
+    | "approved"
+    | "locked";
   submittedAt: string | null;
+  approvedAt: string | null;
+  approvedBy: string | null;
+  latestRejectionNote: string | null;
   rows: WeekRow[];
   totalHours: number;
   standardWeeklyHours: number;
@@ -203,6 +213,22 @@ export async function getWeekData(
         .where(eq(timeEntryTable.timesheetId, sheet[0].id))
     : [];
 
+  // Latest rejection note surfaces on the partner's week view (D4). Only
+  // reject decisions carry notes; approve rows are filtered out here.
+  const latestRejection = sheet[0]
+    ? await db
+        .select({ note: decisionTable.note })
+        .from(decisionTable)
+        .where(
+          and(
+            eq(decisionTable.timesheetId, sheet[0].id),
+            eq(decisionTable.decision, "reject"),
+          ),
+        )
+        .orderBy(desc(decisionTable.decidedAt))
+        .limit(1)
+    : [];
+
   const allHolidayDates = (
     await db.select({ date: holidayTable.observedDate }).from(holidayTable)
   ).map((h) => h.date);
@@ -274,6 +300,9 @@ export async function getWeekData(
     dates,
     state: sheet[0]?.state ?? "not_started",
     submittedAt: sheet[0]?.submittedAt ? sheet[0].submittedAt.toISOString() : null,
+    approvedAt: sheet[0]?.approvedAt ? sheet[0].approvedAt.toISOString() : null,
+    approvedBy: sheet[0]?.approvedBy ?? null,
+    latestRejectionNote: latestRejection[0]?.note ?? null,
     rows: [...rows.values()],
     totalHours: Math.round(totalHours * 4) / 4,
     standardWeeklyHours,
@@ -390,4 +419,120 @@ export async function getComplianceSnapshot(weeksBack = 4): Promise<ComplianceRo
     }
   }
   return rows;
+}
+
+export interface ApprovalQueueRow {
+  userId: string;
+  name: string;
+  team: string | null;
+  weekStartDate: string;
+  totalHours: number;
+  expectedHours: number;
+  submittedAt: string | null;
+  deadline: string;
+}
+
+// Queue rules (D2/D3): managers see direct reports; admins additionally see
+// self-managed (managerId = own id) and unmanaged (managerId null) partners.
+// Self-approval is always blocked, so the viewer's own sheets never appear.
+export async function getApprovalQueue(viewer: {
+  id: string;
+  role: "admin" | "manager" | "employee";
+}): Promise<ApprovalQueueRow[]> {
+  // Admins additionally own self-managed (managerId = own id) and unmanaged
+  // (managerId null) partners; managers only see direct reports. and()
+  // accepts undefined entries, so the admin/manager split stays one clause.
+  const ownerFilter =
+    viewer.role === "admin"
+      ? or(
+          eq(userTable.managerId, viewer.id),
+          isNull(userTable.managerId),
+          eq(userTable.managerId, userTable.id),
+        )
+      : eq(userTable.managerId, viewer.id);
+
+  const [sheets, holidays] = await Promise.all([
+    db
+      .select({
+        userId: userTable.id,
+        name: userTable.name,
+        team: userTable.team,
+        standardWeeklyHours: userTable.standardWeeklyHours,
+        weekStartDate: timesheetTable.weekStartDate,
+        submittedAt: timesheetTable.submittedAt,
+        totalHours: sql<number>`coalesce(sum(${timeEntryTable.hours}), 0)`,
+      })
+      .from(timesheetTable)
+      .innerJoin(userTable, eq(timesheetTable.userId, userTable.id))
+      .leftJoin(timeEntryTable, eq(timeEntryTable.timesheetId, timesheetTable.id))
+      .where(
+        and(
+          eq(timesheetTable.state, "submitted"),
+          eq(userTable.isActive, true),
+          ne(userTable.id, viewer.id),
+          ownerFilter,
+        ),
+      )
+      .groupBy(
+        userTable.id,
+        userTable.name,
+        userTable.team,
+        userTable.standardWeeklyHours,
+        timesheetTable.weekStartDate,
+        timesheetTable.submittedAt,
+      )
+      .orderBy(timesheetTable.weekStartDate, userTable.name),
+    db.select({ date: holidayTable.observedDate }).from(holidayTable),
+  ]);
+
+  const holidayDates = holidays.map((h) => h.date);
+
+  return sheets.map((sheet) => ({
+    userId: sheet.userId,
+    name: sheet.name,
+    team: sheet.team,
+    weekStartDate: sheet.weekStartDate,
+    totalHours: Math.round(Number(sheet.totalHours) * 4) / 4,
+    expectedHours: expectedHours(
+      sheet.weekStartDate,
+      sheet.standardWeeklyHours,
+      holidayDates,
+    ),
+    submittedAt: sheet.submittedAt ? sheet.submittedAt.toISOString() : null,
+    deadline: deadlineForWeek(sheet.weekStartDate, holidayDates),
+  }));
+}
+
+// Latest sheet the partner still has in correction (D4), with the most recent
+// rejection note. Drives the dashboard "action needed" indicator — covers
+// past weeks too, not just the current one.
+export async function getOwnLatestCorrection(
+  userId: string,
+): Promise<{ weekStartDate: string; note: string | null } | null> {
+  const [sheet] = await db
+    .select({ id: timesheetTable.id, weekStartDate: timesheetTable.weekStartDate })
+    .from(timesheetTable)
+    .where(
+      and(
+        eq(timesheetTable.userId, userId),
+        eq(timesheetTable.state, "in_correction"),
+      ),
+    )
+    .orderBy(desc(timesheetTable.weekStartDate))
+    .limit(1);
+  if (!sheet) return null;
+
+  const [decision] = await db
+    .select({ note: decisionTable.note })
+    .from(decisionTable)
+    .where(
+      and(
+        eq(decisionTable.timesheetId, sheet.id),
+        eq(decisionTable.decision, "reject"),
+      ),
+    )
+    .orderBy(desc(decisionTable.decidedAt))
+    .limit(1);
+
+  return { weekStartDate: sheet.weekStartDate, note: decision?.note ?? null };
 }

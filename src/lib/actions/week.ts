@@ -1,6 +1,6 @@
 "use server";
 
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { revalidatePath } from "next/cache";
 
 import { db } from "@/db";
@@ -14,7 +14,6 @@ import {
   timesheet as timesheetTable,
   user as userTable,
 } from "@/db/schema";
-import { requirePeopleManager } from "@/lib/permissions";
 import { requireUser } from "@/lib/session";
 import { MAX_HOURS_PER_DAY } from "@/lib/config";
 import { classifyEntry, classifyNonProjectEntry, type RuleInfo } from "@/lib/classification";
@@ -251,6 +250,10 @@ export async function saveWeek(input: SaveWeekInput): Promise<ActionResult> {
       .set({
         state: "in_progress",
         submittedAt: null,
+        // D4: editing an approved sheet reverts it to draft — approval only
+        // gates the lock step, so the prior approval is cleared.
+        approvedAt: null,
+        approvedBy: null,
       })
       .where(eq(timesheetTable.id, sheet.id))
       .run();
@@ -295,7 +298,14 @@ export async function submitWeek(weekStartDate: string): Promise<ActionResult> {
 
   await db
     .update(timesheetTable)
-    .set({ state: "submitted", submittedAt: new Date() })
+    .set({
+      state: "submitted",
+      submittedAt: new Date(),
+      // D4: resubmission restarts the approval cycle — a prior approval no
+      // longer applies to the edited entries.
+      approvedAt: null,
+      approvedBy: null,
+    })
     .where(eq(timesheetTable.id, sheet.id));
 
   revalidateWeekPaths();
@@ -403,7 +413,13 @@ export async function copyPriorWeek(weekStartDate: string): Promise<ActionResult
 
     tx
       .update(timesheetTable)
-      .set({ state: "in_progress", submittedAt: null })
+      .set({
+        state: "in_progress",
+        submittedAt: null,
+        // D4: copying into an approved sheet reverts it to draft.
+        approvedAt: null,
+        approvedBy: null,
+      })
       .where(eq(timesheetTable.id, sheet.id))
       .run();
   });
@@ -464,42 +480,5 @@ export async function removeFavorite(id: string): Promise<ActionResult> {
     .delete(favoriteTable)
     .where(and(eq(favoriteTable.id, id), eq(favoriteTable.userId, sessionUser.id)));
   revalidatePath("/week");
-  return { ok: true };
-}
-
-export async function simulateClose(weekStartDate: string): Promise<ActionResult> {
-  await requirePeopleManager();
-  if (!isWeekStart(weekStartDate)) {
-    return { ok: false, error: "Invalid week." };
-  }
-
-  await db
-    .update(timesheetTable)
-    .set({ state: "locked" })
-    .where(eq(timesheetTable.weekStartDate, weekStartDate));
-
-  revalidateWeekPaths();
-  return { ok: true };
-}
-
-export async function unlockWeek(weekStartDate: string): Promise<ActionResult> {
-  await requirePeopleManager();
-
-  // simulateClose locks every sheet in the week (including never-submitted
-  // ones), so restore per-sheet state from evidence: submittedAt proves a real
-  // submission; anything else was in_progress before the lock.
-  await db
-    .update(timesheetTable)
-    .set({
-      state: sql`CASE WHEN ${timesheetTable.submittedAt} IS NULL THEN 'in_progress' ELSE 'submitted' END`,
-    })
-    .where(
-      and(
-        eq(timesheetTable.weekStartDate, weekStartDate),
-        eq(timesheetTable.state, "locked"),
-      ),
-    );
-
-  revalidateWeekPaths();
   return { ok: true };
 }

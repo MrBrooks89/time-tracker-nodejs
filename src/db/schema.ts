@@ -219,15 +219,71 @@ export const timesheet = sqliteTable(
       .references(() => user.id, { onDelete: "cascade" }),
     weekStartDate: text("week_start_date").notNull(),
     state: text("state", {
-      enum: ["not_started", "in_progress", "submitted", "in_correction", "locked"],
+      enum: [
+        "not_started",
+        "in_progress",
+        "submitted",
+        "in_correction",
+        "approved",
+        "locked",
+      ],
     })
       .notNull()
       .default("not_started"),
     submittedAt: integer("submitted_at", { mode: "timestamp_ms" }),
+    approvedAt: integer("approved_at", { mode: "timestamp_ms" }),
+    approvedBy: text("approved_by").references((): AnySQLiteColumn => user.id),
   },
   (table) => [
     uniqueIndex("timesheet_user_week_idx").on(table.userId, table.weekStartDate),
     index("timesheet_week_start_date_idx").on(table.weekStartDate),
+  ],
+);
+
+// Insert-only audit trail: one row per approval decision (approve/reject),
+// full history preserved. Rejection notes surface on the partner's week view.
+export const timesheetDecision = sqliteTable(
+  "timesheet_decision",
+  {
+    id: text("id").primaryKey(),
+    timesheetId: text("timesheet_id")
+      .notNull()
+      .references(() => timesheet.id, { onDelete: "cascade" }),
+    decision: text("decision", {
+      enum: ["approve", "reject"],
+    }).notNull(),
+    decidedBy: text("decided_by")
+      .notNull()
+      .references(() => user.id),
+    note: text("note"),
+    decidedAt: integer("decided_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    index("timesheet_decision_timesheet_id_idx").on(table.timesheetId),
+  ],
+);
+
+// One row per fiscal period once close is initiated; absence = open period.
+// closedAt null → close initiated but not yet finalized.
+export const periodClose = sqliteTable(
+  "period_close",
+  {
+    id: text("id").primaryKey(),
+    fiscalYear: integer("fiscal_year").notNull(),
+    periodNumber: integer("period_number").notNull(),
+    correctionWindowEndsAt: integer("correction_window_ends_at", {
+      mode: "timestamp_ms",
+    }),
+    closedAt: integer("closed_at", { mode: "timestamp_ms" }),
+    closedBy: text("closed_by").references(() => user.id),
+  },
+  (table) => [
+    uniqueIndex("period_close_year_period_idx").on(
+      table.fiscalYear,
+      table.periodNumber,
+    ),
   ],
 );
 
@@ -316,6 +372,10 @@ export type Holiday = typeof holiday.$inferSelect;
 export type NewHoliday = typeof holiday.$inferInsert;
 export type Timesheet = typeof timesheet.$inferSelect;
 export type NewTimesheet = typeof timesheet.$inferInsert;
+export type TimesheetDecision = typeof timesheetDecision.$inferSelect;
+export type NewTimesheetDecision = typeof timesheetDecision.$inferInsert;
+export type PeriodClose = typeof periodClose.$inferSelect;
+export type NewPeriodClose = typeof periodClose.$inferInsert;
 export type TimeEntry = typeof timeEntry.$inferSelect;
 export type NewTimeEntry = typeof timeEntry.$inferInsert;
 export type Favorite = typeof favorite.$inferSelect;

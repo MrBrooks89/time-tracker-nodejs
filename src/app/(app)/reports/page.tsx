@@ -444,7 +444,13 @@ async function ReportsBody({
 
   if (tab === "compliance") {
     const rows = await getComplianceReport(viewer, scopeData.scope);
-    const outstanding = rows.filter((r) => r.state !== "submitted" && r.state !== "locked");
+    // Submission-focused compliance (RP-002): only sheets still open or
+    // mid-fix are outstanding. submitted/approved/locked are settled.
+    const outstanding = rows.filter((r) =>
+      r.state === "not_started" ||
+      r.state === "in_progress" ||
+      r.state === "in_correction",
+    );
     return (
       <div className="flex flex-col gap-6">
         <Card className="animate-scale-in">
@@ -469,7 +475,7 @@ async function ReportsBody({
             ) : outstanding.length === 0 ? (
               <div className="blueprint-surface flex min-h-24 items-center justify-center rounded-xl p-8">
                 <p className="text-sm text-muted-foreground">
-                  All timesheets in range are submitted or locked.
+                  All timesheets in range are submitted, approved, or locked.
                 </p>
               </div>
             ) : (
