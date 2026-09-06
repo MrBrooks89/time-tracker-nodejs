@@ -36,10 +36,25 @@ function check(name, cond, detail = "") {
   }
 }
 
-/** Remove test data from a previous run (user delete cascades the rest). */
+/** Remove test data from a previous run (user delete cascades the rest).
+ * Plan 5 audit/correction/reminder rows reference the user without cascade
+ * (audit trail is append-only by design), so clear them explicitly first. */
 function cleanupSmokeData() {
   const db = new Database(path.join(process.cwd(), "data", "app.db"));
   db.pragma("foreign_keys = ON");
+  const smokeUser = db
+    .prepare("SELECT id FROM user WHERE email = ?")
+    .get(SMOKE_EMAIL);
+  if (smokeUser) {
+    db.prepare("DELETE FROM audit_log WHERE actor_id = ?").run(smokeUser.id);
+    db.prepare("DELETE FROM reminder_log WHERE user_id = ? OR reminded_by = ?").run(
+      smokeUser.id,
+      smokeUser.id,
+    );
+    db.prepare("DELETE FROM correction_log WHERE corrected_by = ?").run(
+      smokeUser.id,
+    );
+  }
   db.prepare("DELETE FROM user WHERE email = ?").run(SMOKE_EMAIL);
   db.prepare("DELETE FROM project WHERE name = ?").run(SMOKE_PROJECT);
   db.close();
@@ -197,7 +212,15 @@ async function signInFresh(browser, email, password = PASSWORD) {
   check("week page renders", weekBody.includes("My Week"));
 
   // Add a non-project category row (always available), fill 8h on first day
-  const addCatBtn = page.getByRole("button", { name: /category row/i });
+  let addCatBtn = page.getByRole("button", { name: /category row/i });
+  try {
+    // The week page renders progressively (holiday pre-population, audit
+    // queries) — wait for the button instead of counting instantly.
+    await addCatBtn.first().waitFor({ state: "visible", timeout: 10000 });
+    addCatBtn = addCatBtn.first();
+  } catch {
+    addCatBtn = page.getByRole("button", { name: /category row/i });
+  }
   if (await addCatBtn.count()) {
     await addCatBtn.click();
     const firstCell = page.locator('input[type="number"]').first();

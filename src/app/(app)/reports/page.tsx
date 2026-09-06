@@ -1,14 +1,20 @@
 import Link from "next/link";
-import { Download } from "lucide-react";
+import { Download, History } from "lucide-react";
 
 import { FISCAL_PERIODS } from "@/lib/fiscal";
-import { canManagePeople } from "@/lib/permissions";
+import {
+  allowedReportTabs,
+  canFilterReportsByPartner,
+  type ReportTab,
+} from "@/lib/permissions";
 import { requireUser } from "@/lib/session";
 import {
   getActualsReport,
   getClassificationReport,
   getComplianceReport,
+  getManagedProjectIds,
   getReportOptions,
+  getRestatedAt,
   getSpendDashboard,
   resolveScope,
 } from "@/lib/reports";
@@ -50,6 +56,21 @@ function formatDateShort(dateStr: string): string {
     month: "short",
     day: "numeric",
   });
+}
+
+// TS-029: the restated-as-of stamp is a real timestamp — rendered in UTC so
+// server and client always agree on the displayed moment.
+function formatTimestampUtc(date: Date): string {
+  return `${date.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  })}, ${date.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    timeZone: "UTC",
+  })} UTC`;
 }
 
 function exportHref(params: Record<string, string | undefined>, tab: string): string {
@@ -97,7 +118,14 @@ export default async function ReportsPage({
 }) {
   const viewer = await requireUser();
   const params = await searchParams;
-  const canManage = canManagePeople(viewer.role);
+
+  // Section 1.4: server-side tab gating. finance_viewer gets the aggregate
+  // actuals/classification tabs only; project_manager gets project-scoped
+  // reports without the partner-centric compliance sheet. Nav gating is
+  // cosmetic — a disallowed ?tab= falls back to the first allowed tab here,
+  // before any data loads, and the export route re-verifies with a 403.
+  const allowedTabs = allowedReportTabs(viewer.role);
+  const canFilter = canFilterReportsByPartner(viewer.role);
 
   const scopeData = resolveScope({
     week: params.week,
@@ -117,13 +145,19 @@ export default async function ReportsPage({
     );
   }
 
-  const tab = reportTabs.some((t) => t.key === params.tab) ? params.tab! : "dashboard";
+  const tab: ReportTab = allowedTabs.includes(params.tab as ReportTab)
+    ? (params.tab as ReportTab)
+    : allowedTabs[0];
+
+  // TS-029: the selected scope's period was corrected after its close was
+  // finalized — badge the report as restated with the as-of timestamp.
+  const restatedAt = await getRestatedAt(scopeData.scope);
 
   const filters = {
-    team: canManage ? params.team : undefined,
-    managerId: canManage ? params.managerId : undefined,
+    team: canFilter ? params.team : undefined,
+    managerId: canFilter ? params.managerId : undefined,
     projectId: params.projectId,
-    userId: canManage ? params.userId : undefined,
+    userId: canFilter ? params.userId : undefined,
     categoryId: params.categoryId,
   };
 
@@ -154,9 +188,20 @@ export default async function ReportsPage({
         <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex flex-col gap-2">
             <p className="micro-label">Insights / Reporting</p>
-            <h1 className="font-display text-3xl font-bold tracking-tight">
-              Reports
-            </h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="font-display text-3xl font-bold tracking-tight">
+                Reports
+              </h1>
+              {restatedAt ? (
+                <Badge
+                  variant="default"
+                  title={`Figures were restated as of ${formatTimestampUtc(restatedAt)} — a locked-period correction was applied after final close.`}
+                >
+                  <History aria-hidden="true" />
+                  Restated {formatTimestampUtc(restatedAt)}
+                </Badge>
+              ) : null}
+            </div>
             <p className="text-sm text-muted-foreground">
               {scopeData.label} · {formatDateShort(scopeData.from)} – {formatDateShort(scopeData.to)}
             </p>
@@ -171,7 +216,9 @@ export default async function ReportsPage({
           </Link>
         </div>
         <div className="flex flex-wrap gap-2">
-          {reportTabs.map((t) => (
+          {reportTabs
+            .filter((t) => allowedTabs.includes(t.key as ReportTab))
+            .map((t) => (
             <Link
               key={t.key}
               href={scopeLinkBase({ tab: t.key })}
@@ -194,6 +241,11 @@ export default async function ReportsPage({
         filters={filters}
         options={optionsPromise}
         currentParams={currentParams}
+        managedProjectIds={
+          viewer.role === "project_manager"
+            ? await getManagedProjectIds(viewer.id)
+            : []
+        }
       />
     </div>
   );
@@ -206,6 +258,7 @@ async function ReportsBody({
   filters,
   options,
   currentParams,
+  managedProjectIds,
 }: {
   viewer: Awaited<ReturnType<typeof requireUser>>;
   tab: string;
@@ -213,9 +266,26 @@ async function ReportsBody({
   filters: Record<string, string | undefined>;
   options: Promise<Awaited<ReturnType<typeof getReportOptions>>>;
   currentParams: Record<string, string | undefined>;
+  managedProjectIds: string[];
 }) {
   const opts = await options;
-  const filterControls = <FilterControls opts={opts} currentParams={currentParams} canManage={viewer.role !== "employee"} />;
+
+  // Section 1.4: project managers may only filter by the projects they
+  // manage — narrow the project dropdown to that set server-side.
+  const scopedOpts =
+    viewer.role === "project_manager"
+      ? (() => {
+          const managed = new Set(managedProjectIds);
+          return { ...opts, projects: opts.projects.filter((p) => managed.has(p.id)) };
+        })()
+      : opts;
+  const filterControls = (
+    <FilterControls
+      opts={scopedOpts}
+      currentParams={currentParams}
+      canFilterPartner={canFilterReportsByPartner(viewer.role)}
+    />
+  );
 
   if (tab === "dashboard") {
     const data = await getSpendDashboard(viewer, filters);
@@ -344,36 +414,40 @@ async function ReportsBody({
           <CardContent>{filterControls}</CardContent>
         </Card>
 
-        <Card className="animate-scale-in">
-          <CardHeader>
-            <p className="micro-label">Breakdown / Partner</p>
-            <CardTitle>Hours by partner</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {report.byPartner.length === 0 ? (
-              <EmptyState message="NO ENTRIES IN RANGE" />
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Partner</TableHead>
-                    <TableHead>Entries</TableHead>
-                    <TableHead>Hours</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {report.byPartner.slice(0, 15).map((row) => (
-                    <TableRow key={row.label}>
-                      <TableCell className="text-sm font-medium">{row.label}</TableCell>
-                      <TableCell className="font-mono text-xs">{row.entries}</TableCell>
-                      <TableCell className="font-mono text-xs">{formatHours(row.hours)}</TableCell>
+        {/* Section 1.4: finance_viewer sees aggregate totals only — the
+            per-partner breakdown is hidden (and stripped server-side). */}
+        {viewer.role !== "finance_viewer" ? (
+          <Card className="animate-scale-in">
+            <CardHeader>
+              <p className="micro-label">Breakdown / Partner</p>
+              <CardTitle>Hours by partner</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {report.byPartner.length === 0 ? (
+                <EmptyState message="NO ENTRIES IN RANGE" />
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Partner</TableHead>
+                      <TableHead>Entries</TableHead>
+                      <TableHead>Hours</TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
+                  </TableHeader>
+                  <TableBody>
+                    {report.byPartner.slice(0, 15).map((row) => (
+                      <TableRow key={row.label}>
+                        <TableCell className="text-sm font-medium">{row.label}</TableCell>
+                        <TableCell className="font-mono text-xs">{row.entries}</TableCell>
+                        <TableCell className="font-mono text-xs">{formatHours(row.hours)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
+        ) : null}
 
         <div className="grid gap-6 lg:grid-cols-2">
           <Card className="animate-scale-in">
@@ -603,11 +677,11 @@ async function ReportsBody({
 function FilterControls({
   opts,
   currentParams,
-  canManage,
+  canFilterPartner,
 }: {
   opts: Awaited<ReturnType<typeof getReportOptions>>;
   currentParams: Record<string, string | undefined>;
-  canManage: boolean;
+  canFilterPartner: boolean;
 }) {
   const years = [...new Set(FISCAL_PERIODS.map((p) => p.fiscalYear))];
   return (
@@ -656,7 +730,7 @@ function FilterControls({
             defaultValue={currentParams.week ?? ""}
           />
         </div>
-        {canManage ? (
+        {canFilterPartner ? (
           <div className="flex flex-col gap-2">
             <Label htmlFor="filter-team">Team</Label>
             <Select id="filter-team" name="team" defaultValue={currentParams.team ?? ""}>
@@ -669,7 +743,7 @@ function FilterControls({
             </Select>
           </div>
         ) : null}
-        {canManage ? (
+        {canFilterPartner ? (
           <div className="flex flex-col gap-2">
             <Label htmlFor="filter-manager">Manager</Label>
             <Select id="filter-manager" name="managerId" defaultValue={currentParams.managerId ?? ""}>
@@ -693,7 +767,7 @@ function FilterControls({
             ))}
           </Select>
         </div>
-        {canManage ? (
+        {canFilterPartner ? (
           <div className="flex flex-col gap-2">
             <Label htmlFor="filter-user">Partner</Label>
             <Select id="filter-user" name="userId" defaultValue={currentParams.userId ?? ""}>

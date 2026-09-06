@@ -20,10 +20,17 @@ import { CORRECTION_WINDOW_DAYS, HOURS_TOLERANCE } from "@/lib/config";
 import { FISCAL_PERIODS, type FiscalPeriodInfo } from "@/lib/fiscal";
 import { expectedHours } from "@/lib/holidays";
 import { requireRole } from "@/lib/permissions";
+import { recordAudit } from "@/lib/audit";
 
 export interface ActionResult {
   ok: boolean;
   error?: string;
+}
+
+// DA-009: periods have no surrogate id in the close flow — the composite
+// fiscal coordinates are the stable, human-readable entity key.
+function periodEntityId(fiscalYear: number, periodNumber: number): string {
+  return `FY${fiscalYear}-P${periodNumber}`;
 }
 
 function findFiscalPeriod(
@@ -95,7 +102,7 @@ export async function initiateClose(
   fiscalYear: number,
   periodNumber: number,
 ): Promise<ActionResult> {
-  await requireRole(["admin"]);
+  const sessionUser = await requireRole(["admin"]);
 
   const period = findFiscalPeriod(fiscalYear, periodNumber);
   if (!period) {
@@ -165,6 +172,16 @@ export async function initiateClose(
         .where(inArray(timesheetTable.id, flaggedIds))
         .run();
     }
+
+    // DA-009: close initiation is a compliance event — atomically audited
+    // with the flagged-sheet state flips.
+    recordAudit(tx, {
+      actorId: sessionUser.id,
+      action: "close_initiate",
+      entityType: "period",
+      entityId: periodEntityId(fiscalYear, periodNumber),
+      newValue: `flagged=${flaggedIds.length}`,
+    });
   });
 
   revalidateClosePaths();
@@ -258,6 +275,15 @@ export async function finalizeClose(
       .set({ closedAt: new Date(), closedBy: sessionUser.id })
       .where(eq(periodCloseTable.id, close.id))
       .run();
+
+    // DA-009: finalization locks the whole period — atomically audited.
+    recordAudit(tx, {
+      actorId: sessionUser.id,
+      action: "close_finalize",
+      entityType: "period",
+      entityId: periodEntityId(fiscalYear, periodNumber),
+      newValue: "locked",
+    });
   });
 
   revalidateClosePaths();
@@ -271,7 +297,7 @@ export async function reopenPeriod(
   fiscalYear: number,
   periodNumber: number,
 ): Promise<ActionResult> {
-  await requireRole(["admin"]);
+  const sessionUser = await requireRole(["admin"]);
 
   const [close] = await db
     .select()
@@ -310,6 +336,17 @@ export async function reopenPeriod(
       .run();
 
     tx.delete(periodCloseTable).where(eq(periodCloseTable.id, close.id)).run();
+
+    // DA-009: reopening a finalized period (period unlock) — atomically
+    // audited so the unlock is always traceable.
+    recordAudit(tx, {
+      actorId: sessionUser.id,
+      action: "close_reopen",
+      entityType: "period",
+      entityId: periodEntityId(fiscalYear, periodNumber),
+      oldValue: "locked",
+      newValue: "reopened",
+    });
   });
 
   revalidateClosePaths();

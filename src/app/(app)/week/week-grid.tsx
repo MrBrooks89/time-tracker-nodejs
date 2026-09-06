@@ -5,7 +5,9 @@ import { useRouter } from "next/navigation";
 import { Plus, Star, Trash2 } from "lucide-react";
 
 import {
+  addFavorite,
   copyPriorWeek,
+  removeFavorite,
   saveWeek,
   submitWeek,
   type SaveRow,
@@ -56,6 +58,9 @@ interface WeekGridProps {
   expectedHours: number;
   standardWeeklyHours: number;
   enterable: boolean;
+  // TS-021/022 delegated entry: passed through to server actions, which
+  // re-verify admin permission server-side. Null/undefined = own week.
+  targetUserId?: string | null;
 }
 
 let rowCounter = 0;
@@ -107,6 +112,43 @@ export function WeekGrid(props: WeekGridProps) {
         : "met";
 
   const holidayAdjusted = props.expectedHours !== props.standardWeeklyHours;
+
+  // TS-012: favorites are keyed by project|taskCode; the map lets each row
+  // look up its favorite id for unpinning without extra server round-trips.
+  // Declared before the pin sort below consumes isFavorited.
+  const favoriteIdByCombo = new Map(
+    props.favorites.map((fav) => [`${fav.projectId}|${fav.taskCodeId}`, fav.id]),
+  );
+
+  function isFavorited(row: GridRow): boolean {
+    return Boolean(
+      row.projectId &&
+        row.taskCodeId &&
+        favoriteIdByCombo.has(`${row.projectId}|${row.taskCodeId}`),
+    );
+  }
+
+  function toggleFavorite(row: GridRow) {
+    if (!row.projectId || !row.taskCodeId) return;
+    const favId = favoriteIdByCombo.get(`${row.projectId}|${row.taskCodeId}`);
+    const projectId = row.projectId;
+    const taskCodeId = row.taskCodeId;
+    runAction(() =>
+      favId ? removeFavorite(favId) : addFavorite(projectId, taskCodeId),
+    );
+  }
+
+  // TS-012: pin favorited project/task rows to the top of the grid. Stable
+  // sort keeps the existing order within each group; row keys are untouched
+  // so in-progress edits survive reordering.
+  const sortedRows = rows
+    .map((row, index) => ({ row, index }))
+    .sort((a, b) => {
+      const af = isFavorited(a.row) ? 0 : 1;
+      const bf = isFavorited(b.row) ? 0 : 1;
+      return af !== bf ? af - bf : a.index - b.index;
+    })
+    .map((entry) => entry.row);
 
   function updateRow(key: string, patch: Partial<GridRow>) {
     setRows((current) =>
@@ -187,6 +229,7 @@ export function WeekGrid(props: WeekGridProps) {
           note: row.note,
           days: row.days,
         })),
+        targetUserId: props.targetUserId,
       }),
     );
   }
@@ -195,7 +238,7 @@ export function WeekGrid(props: WeekGridProps) {
     if (!window.confirm("Submit this timesheet? You can still edit it until the period closes.")) {
       return;
     }
-    runAction(() => submitWeek(props.weekStartDate));
+    runAction(() => submitWeek(props.weekStartDate, props.targetUserId));
   }
 
   return (
@@ -273,7 +316,7 @@ export function WeekGrid(props: WeekGridProps) {
                 </TableCell>
               </TableRow>
             ) : null}
-            {rows.map((row) => {
+            {sortedRows.map((row) => {
               const rowTotal = Object.values(row.days).reduce((s, h) => s + h, 0);
               const isProjectRow = row.nonProjectCategoryId === null;
               const selectedTaskCode = props.taskCodes.find(
@@ -281,30 +324,69 @@ export function WeekGrid(props: WeekGridProps) {
               );
               const showHandsOn =
                 isProjectRow && selectedTaskCode?.name === "Manager Oversight";
+              // TS-012: stars are only meaningful for rows with a full
+              // project+taskCode combo, and only on the partner's own week —
+              // favorites always belong to the acting session user, so they
+              // are hidden in delegated mode to avoid confusion.
+              const favorited = isFavorited(row);
+              const starEligible =
+                isProjectRow &&
+                Boolean(row.projectId && row.taskCodeId) &&
+                props.targetUserId == null;
+              const selectedAssignment = props.assignments.find(
+                (a) => a.projectId === row.projectId,
+              );
+              const favoriteLabel = `${selectedAssignment ? `#${selectedAssignment.projectNumber} ${selectedAssignment.projectName}` : "Project"} / ${selectedTaskCode?.name ?? "task"}`;
 
               return (
-                <TableRow key={row.key} className="hover:bg-transparent">
+                <TableRow
+                  key={row.key}
+                  className={
+                    favorited ? "bg-primary/5 hover:bg-primary/10" : "hover:bg-transparent"
+                  }
+                >
                   <TableCell className="align-top">
                     <div className="flex flex-col gap-2">
                       {isProjectRow ? (
                         <>
-                          <Select
-                            aria-label="Project"
-                            value={row.projectId ?? ""}
-                            disabled={!editable || isPending}
-                            onChange={(e) =>
-                              updateRow(row.key, {
-                                projectId: e.target.value || null,
-                              })
-                            }
-                          >
-                            <option value="">Select project…</option>
-                            {props.assignments.map((a) => (
-                              <option key={a.projectId} value={a.projectId}>
-                                #{a.projectNumber} {a.projectName}
-                              </option>
-                            ))}
-                          </Select>
+                          <div className="flex items-start gap-1">
+                            <Select
+                              aria-label="Project"
+                              className="min-w-0 flex-1"
+                              value={row.projectId ?? ""}
+                              disabled={!editable || isPending}
+                              onChange={(e) =>
+                                updateRow(row.key, {
+                                  projectId: e.target.value || null,
+                                })
+                              }
+                            >
+                              <option value="">Select project…</option>
+                              {props.assignments.map((a) => (
+                                <option key={a.projectId} value={a.projectId}>
+                                  #{a.projectNumber} {a.projectName}
+                                </option>
+                              ))}
+                            </Select>
+                            {starEligible ? (
+                              <button
+                                type="button"
+                                aria-pressed={favorited}
+                                aria-label={`${favorited ? "Unpin favorite" : "Pin favorite"}: ${favoriteLabel}`}
+                                disabled={!editable || isPending}
+                                onClick={() => toggleFavorite(row)}
+                                className="mt-1 inline-flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-all outline-none hover:-translate-y-0.5 hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
+                              >
+                                <Star
+                                  className={
+                                    favorited
+                                      ? "size-4 fill-current text-primary"
+                                      : "size-4"
+                                  }
+                                />
+                              </button>
+                            ) : null}
+                          </div>
                           <Select
                             aria-label="Task code"
                             value={row.taskCodeId ?? ""}
@@ -488,7 +570,9 @@ export function WeekGrid(props: WeekGridProps) {
             <Button
               variant="outline"
               disabled={!editable || isPending}
-              onClick={() => runAction(() => copyPriorWeek(props.weekStartDate))}
+              onClick={() =>
+                runAction(() => copyPriorWeek(props.weekStartDate, props.targetUserId))
+              }
             >
               Copy prior week
             </Button>

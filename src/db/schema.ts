@@ -17,7 +17,16 @@ export const user = sqliteTable("user", {
     .notNull()
     .default(sql`0`),
   image: text("image"),
-  role: text("role", { enum: ["admin", "manager", "employee"] })
+  role: text("role", {
+    enum: [
+      "admin",
+      "manager",
+      "employee",
+      "finance_viewer",
+      "leadership",
+      "project_manager",
+    ],
+  })
     .notNull()
     .default("employee"),
   isActive: integer("is_active", { mode: "boolean" })
@@ -278,6 +287,10 @@ export const periodClose = sqliteTable(
     }),
     closedAt: integer("closed_at", { mode: "timestamp_ms" }),
     closedBy: text("closed_by").references(() => user.id),
+    // Set when a locked period is corrected after finalize (TS-029):
+    // reports compare entry updatedAt / correction timestamps against this
+    // to badge data as "restated".
+    restatedAt: integer("restated_at", { mode: "timestamp_ms" }),
   },
   (table) => [
     uniqueIndex("period_close_year_period_idx").on(
@@ -310,6 +323,9 @@ export const timeEntry = sqliteTable(
       enum: ["capex", "opex"],
     }).notNull(),
     note: text("note"),
+    // Actor who created/edited the entry (TS-021/022 delegated entry).
+    // Null for legacy rows created before delegation existed.
+    enteredBy: text("entered_by").references((): AnySQLiteColumn => user.id),
     createdAt: integer("created_at", { mode: "timestamp_ms" })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
@@ -343,6 +359,85 @@ export const favorite = sqliteTable(
       table.projectId,
       table.taskCodeId,
     ),
+  ],
+);
+
+// Unified append-only audit trail (DA-009): one row per notable action
+// (entry edits, submissions, approvals, unlocks, corrections, reminders).
+// Never updated or deleted — corrections add new rows, never rewrite history.
+export const auditLog = sqliteTable(
+  "audit_log",
+  {
+    id: text("id").primaryKey(),
+    actorId: text("actor_id")
+      .notNull()
+      .references(() => user.id),
+    action: text("action").notNull(),
+    entityType: text("entity_type").notNull(),
+    entityId: text("entity_id").notNull(),
+    field: text("field"),
+    oldValue: text("old_value"),
+    newValue: text("new_value"),
+    reason: text("reason"),
+    createdAt: integer("created_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    index("audit_log_entity_idx").on(table.entityType, table.entityId),
+    index("audit_log_created_at_idx").on(table.createdAt),
+  ],
+);
+
+// Locked-period corrections (TS-028): one row per admin correction applied to
+// a time entry after its week was locked. `reason` is mandatory for
+// compliance; original/new values are captured for the restating trail.
+export const correctionLog = sqliteTable(
+  "correction_log",
+  {
+    id: text("id").primaryKey(),
+    timeEntryId: text("time_entry_id")
+      .notNull()
+      .references(() => timeEntry.id, { onDelete: "cascade" }),
+    timesheetId: text("timesheet_id")
+      .notNull()
+      .references(() => timesheet.id, { onDelete: "cascade" }),
+    correctedBy: text("corrected_by")
+      .notNull()
+      .references(() => user.id),
+    reason: text("reason").notNull(),
+    originalValue: text("original_value"),
+    newValue: text("new_value"),
+    correctedAt: integer("corrected_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+  },
+  (table) => [
+    index("correction_log_time_entry_id_idx").on(table.timeEntryId),
+    index("correction_log_timesheet_id_idx").on(table.timesheetId),
+  ],
+);
+
+// In-app reminder records (TS-019/020): one row per partner reminded about an
+// unsubmitted timesheet. Hackathon scope — no email, record + export only.
+export const reminderLog = sqliteTable(
+  "reminder_log",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    weekStartDate: text("week_start_date").notNull(),
+    remindedBy: text("reminded_by")
+      .notNull()
+      .references(() => user.id),
+    remindedAt: integer("reminded_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    note: text("note"),
+  },
+  (table) => [
+    index("reminder_log_user_week_idx").on(table.userId, table.weekStartDate),
   ],
 );
 
@@ -380,3 +475,9 @@ export type TimeEntry = typeof timeEntry.$inferSelect;
 export type NewTimeEntry = typeof timeEntry.$inferInsert;
 export type Favorite = typeof favorite.$inferSelect;
 export type NewFavorite = typeof favorite.$inferInsert;
+export type AuditLog = typeof auditLog.$inferSelect;
+export type NewAuditLog = typeof auditLog.$inferInsert;
+export type CorrectionLog = typeof correctionLog.$inferSelect;
+export type NewCorrectionLog = typeof correctionLog.$inferInsert;
+export type ReminderLog = typeof reminderLog.$inferSelect;
+export type NewReminderLog = typeof reminderLog.$inferInsert;

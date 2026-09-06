@@ -1,7 +1,7 @@
 import Link from "next/link";
 
 import { currentWeek } from "@/lib/fiscal";
-import { canManagePeople } from "@/lib/permissions";
+import { canManagePeople, isReadOnlyRole } from "@/lib/permissions";
 import { requireUser } from "@/lib/session";
 import {
   getApprovalQueue,
@@ -88,14 +88,18 @@ export default async function DashboardPage() {
             <SignOutButton />
           </div>
         </div>
-        <div>
-          <Link
-            href="/week"
-            className="command-strip inline-flex h-10 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-full px-5 text-sm font-bold tracking-tight text-primary-foreground shadow-[0_10px_32px_-12px_var(--primary)] outline-none transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_38px_-12px_var(--primary)] focus-visible:ring-[3px] focus-visible:ring-ring/50"
-          >
-            Open my week
-          </Link>
-        </div>
+        {/* Section 1.4: read-only roles (finance_viewer, leadership) have no
+            week entry — the CTA is hidden; the action itself re-verifies. */}
+        {!isReadOnlyRole(user.role) ? (
+          <div>
+            <Link
+              href="/week"
+              className="command-strip inline-flex h-10 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-full px-5 text-sm font-bold tracking-tight text-primary-foreground shadow-[0_10px_32px_-12px_var(--primary)] outline-none transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_38px_-12px_var(--primary)] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+            >
+              Open my week
+            </Link>
+          </div>
+        ) : null}
       </section>
 
       <div className="grid gap-4 sm:grid-cols-3">

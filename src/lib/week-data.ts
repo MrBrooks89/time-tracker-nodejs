@@ -1,4 +1,4 @@
-import { and, desc, eq, gte, inArray, isNull, lte, ne, or, sql } from "drizzle-orm";
+import { and, desc, eq, gte, inArray, isNull, lte, ne, notInArray, or, sql } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -23,6 +23,14 @@ import {
   type FiscalWeekInfo,
 } from "@/lib/fiscal";
 import { deadlineForWeek, expectedHours } from "@/lib/holidays";
+import { TIMESHEET_EXEMPT_ROLES } from "@/lib/permissions";
+import type { Role } from "@/lib/session";
+import {
+  filterExisting,
+  holidayOooEntries,
+  isEditableTimesheetState,
+  OOO_CATEGORY_NAME,
+} from "@/lib/holiday-ooo";
 
 export interface TaskCodeInfo {
   id: string;
@@ -314,6 +322,109 @@ export async function getWeekData(
   };
 }
 
+// FC-010: idempotent Out of Office pre-population on week open. Fires only
+// for enterable (past/current) weeks whose timesheet is editable
+// (not_started/in_progress) — never for submitted/in_correction/locked
+// sheets. A holiday date with ANY existing entry is skipped, so reopening
+// never duplicates. Called by the week page before the data load; safe to
+// call repeatedly.
+export async function ensureHolidayOooEntries(
+  ownerUserId: string,
+  weekStartDate: string,
+  actorId: string = ownerUserId,
+): Promise<void> {
+  if (!weekEnterable(weekStartDate)) return;
+
+  const dates = weekDates(weekStartDate);
+  const [holidays, sheet, userRows] = await Promise.all([
+    db
+      .select({ name: holidayTable.name, date: holidayTable.observedDate })
+      .from(holidayTable)
+      .where(
+        and(
+          gte(holidayTable.observedDate, dates[0]),
+          lte(holidayTable.observedDate, dates[6]),
+        ),
+      ),
+    db
+      .select({ id: timesheetTable.id, state: timesheetTable.state })
+      .from(timesheetTable)
+      .where(
+        and(
+          eq(timesheetTable.userId, ownerUserId),
+          eq(timesheetTable.weekStartDate, weekStartDate),
+        ),
+      )
+      .limit(1),
+    db
+      .select({ standardWeeklyHours: userTable.standardWeeklyHours })
+      .from(userTable)
+      .where(eq(userTable.id, ownerUserId))
+      .limit(1),
+  ]);
+
+  if (holidays.length === 0) return;
+  if (sheet[0] && !isEditableTimesheetState(sheet[0].state)) return;
+
+  // Delegated admin opens pre-populate for the target partner; the sheet is
+  // created here mirroring saveWeek's getOrCreateSheet semantics.
+  let sheetId = sheet[0]?.id;
+  if (!sheetId) {
+    sheetId = crypto.randomUUID();
+    await db.insert(timesheetTable).values({
+      id: sheetId,
+      userId: ownerUserId,
+      weekStartDate,
+      state: "in_progress",
+    });
+  }
+
+  const existingDates = (
+    await db
+      .select({ date: timeEntryTable.entryDate })
+      .from(timeEntryTable)
+      .where(eq(timeEntryTable.timesheetId, sheetId))
+  ).map((r) => r.date);
+
+  const pending = filterExisting(
+    holidayOooEntries(
+      weekStartDate,
+      holidays,
+      userRows[0]?.standardWeeklyHours ?? 40,
+    ),
+    existingDates,
+  );
+  if (pending.length === 0) return;
+
+  // The "Out of Office" non-project category must exist (seed guarantees it);
+  // if it's missing, skip silently rather than break week loading.
+  const [category] = await db
+    .select({ id: categoryTable.id })
+    .from(categoryTable)
+    .where(eq(categoryTable.name, OOO_CATEGORY_NAME))
+    .limit(1);
+  if (!category) return;
+
+  await db.insert(timeEntryTable).values(
+    pending.map((entry) => ({
+      id: crypto.randomUUID(),
+      timesheetId: sheetId,
+      entryDate: entry.date,
+      hours: entry.hours,
+      projectId: null,
+      taskCodeId: null,
+      nonProjectCategoryId: category.id,
+      isHandsOn: false,
+      // Non-project entries classify as opex (classifyNonProjectEntry).
+      resolvedClassification: "opex" as const,
+      note: entry.note,
+      // Actor column (TS-021/022): admin id on delegated opens, the
+      // partner's own id otherwise.
+      enteredBy: actorId,
+    })),
+  );
+}
+
 export interface ComplianceRow {
   userId: string;
   name: string;
@@ -321,6 +432,64 @@ export interface ComplianceRow {
   weekStartDate: string;
   state: string;
   deadline: string;
+}
+
+export interface CorrectionEntryInfo {
+  id: string;
+  entryDate: string;
+  hours: number;
+  note: string | null;
+  projectId: string | null;
+  taskCodeId: string | null;
+  nonProjectCategoryId: string | null;
+  isHandsOn: boolean;
+  projectName: string | null;
+  taskCodeName: string | null;
+  categoryName: string | null;
+}
+
+// TS-028: entry-level rows for the admin correction panel on locked weeks.
+// getWeekData aggregates entries into grid rows (losing entry ids), so the
+// correction path needs its own entry-level fetch.
+export async function getWeekEntriesForCorrection(
+  userId: string,
+  weekStartDate: string,
+): Promise<CorrectionEntryInfo[]> {
+  const [sheet] = await db
+    .select({ id: timesheetTable.id })
+    .from(timesheetTable)
+    .where(
+      and(
+        eq(timesheetTable.userId, userId),
+        eq(timesheetTable.weekStartDate, weekStartDate),
+      ),
+    )
+    .limit(1);
+  if (!sheet) return [];
+
+  return db
+    .select({
+      id: timeEntryTable.id,
+      entryDate: timeEntryTable.entryDate,
+      hours: timeEntryTable.hours,
+      note: timeEntryTable.note,
+      projectId: timeEntryTable.projectId,
+      taskCodeId: timeEntryTable.taskCodeId,
+      nonProjectCategoryId: timeEntryTable.nonProjectCategoryId,
+      isHandsOn: timeEntryTable.isHandsOn,
+      projectName: projectTable.name,
+      taskCodeName: taskCodeTable.name,
+      categoryName: categoryTable.name,
+    })
+    .from(timeEntryTable)
+    .leftJoin(projectTable, eq(timeEntryTable.projectId, projectTable.id))
+    .leftJoin(taskCodeTable, eq(timeEntryTable.taskCodeId, taskCodeTable.id))
+    .leftJoin(
+      categoryTable,
+      eq(timeEntryTable.nonProjectCategoryId, categoryTable.id),
+    )
+    .where(eq(timeEntryTable.timesheetId, sheet.id))
+    .orderBy(timeEntryTable.entryDate, timeEntryTable.id);
 }
 
 export async function getOutstandingWeeksBack(weeksBack = 4): Promise<{
@@ -386,7 +555,14 @@ export async function getComplianceSnapshot(weeksBack = 4): Promise<ComplianceRo
     db
       .select({ id: userTable.id, name: userTable.name, team: userTable.team })
       .from(userTable)
-      .where(eq(userTable.isActive, true))
+      .where(
+        and(
+          eq(userTable.isActive, true),
+          // Read-only roles never file timesheets — exclude them so the
+          // compliance snapshot stays meaningful.
+          notInArray(userTable.role, TIMESHEET_EXEMPT_ROLES),
+        ),
+      )
       .orderBy(userTable.name),
     db
       .select({
@@ -437,7 +613,7 @@ export interface ApprovalQueueRow {
 // Self-approval is always blocked, so the viewer's own sheets never appear.
 export async function getApprovalQueue(viewer: {
   id: string;
-  role: "admin" | "manager" | "employee";
+  role: Role;
 }): Promise<ApprovalQueueRow[]> {
   // Admins additionally own self-managed (managerId = own id) and unmanaged
   // (managerId null) partners; managers only see direct reports. and()

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { TableCell, TableRow } from "@/components/ui/table";
@@ -24,6 +25,8 @@ export interface EmployeeRowData {
   employmentType: string;
   standardWeeklyHours: number;
   assignmentIds: string[];
+  // Admin-only link to open this partner's week (delegated entry).
+  weekHref?: string | null;
 }
 
 export interface EmployeeProjectOption {
@@ -83,6 +86,14 @@ export function EmployeeRow({
         </TableCell>
         <TableCell>
           <div className="flex justify-end gap-1">
+            {employee.weekHref ? (
+              <Link
+                href={employee.weekHref}
+                className="inline-flex h-9 items-center rounded-full px-4 text-sm font-bold tracking-tight text-muted-foreground transition-all duration-200 outline-none hover:bg-muted/60 hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              >
+                Week
+              </Link>
+            ) : null}
             <Button
               variant="ghost"
               size="sm"

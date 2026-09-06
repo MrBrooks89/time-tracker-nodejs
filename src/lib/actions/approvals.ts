@@ -10,7 +10,8 @@ import {
   user as userTable,
 } from "@/db/schema";
 import { canApprove, nextStateOnApprove, nextStateOnReject } from "@/lib/approval";
-import { requireUser } from "@/lib/session";
+import { recordAudit } from "@/lib/audit";
+import { requireUser, type Role } from "@/lib/session";
 
 export interface ActionResult {
   ok: boolean;
@@ -27,7 +28,7 @@ function revalidateApprovalPaths() {
 // Phase B canApprove() rule with real values (D2 self-approval block, D3
 // admin-owns-unmanaged/self-managed). Returns the sheet id on success.
 async function loadApprovableSheet(
-  viewer: { id: string; role: "admin" | "manager" | "employee" },
+  viewer: { id: string; role: Role },
   userId: string,
   weekStartDate: string,
 ): Promise<{ sheetId: string } | { error: string }> {
@@ -112,6 +113,16 @@ export async function approveTimesheet(
         note: null,
       })
       .run();
+
+    // DA-009: approval decision lands in the append-only audit trail,
+    // atomically with the state change.
+    recordAudit(tx, {
+      actorId: viewer.id,
+      action: "approve",
+      entityType: "timesheet",
+      entityId: loaded.sheetId,
+      newValue: nextStateOnApprove(),
+    });
   });
 
   revalidateApprovalPaths();
@@ -157,6 +168,16 @@ export async function rejectTimesheet(
         note: trimmed,
       })
       .run();
+
+    // DA-009: rejection with the mandatory note as the audit reason.
+    recordAudit(tx, {
+      actorId: viewer.id,
+      action: "reject",
+      entityType: "timesheet",
+      entityId: loaded.sheetId,
+      newValue: nextStateOnReject(),
+      reason: trimmed,
+    });
   });
 
   revalidateApprovalPaths();

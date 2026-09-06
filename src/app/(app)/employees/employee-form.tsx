@@ -114,6 +114,9 @@ export function EmployeeForm({
             <option value="employee">Employee</option>
             <option value="manager">Manager</option>
             <option value="admin">Admin</option>
+            <option value="finance_viewer">Finance viewer</option>
+            <option value="leadership">Leadership</option>
+            <option value="project_manager">Project manager</option>
           </Select>
           {lockRole ? (
             <p className="text-xs text-muted-foreground">

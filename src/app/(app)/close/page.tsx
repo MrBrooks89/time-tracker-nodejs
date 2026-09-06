@@ -1,4 +1,5 @@
 import { and, asc, eq, inArray, sql } from "drizzle-orm";
+import { Download } from "lucide-react";
 
 import { db } from "@/db";
 import {
@@ -392,9 +393,27 @@ export default async function ClosePage({
       <Card className="animate-scale-in">
         <CardHeader>
           <p className="micro-label">Close / Exception Report</p>
-          <CardTitle className="flex items-center gap-3">
-            Pre-close exceptions
-            <Badge variant="secondary">{flagged.length} flagged</Badge>
+          <CardTitle className="flex flex-wrap items-center justify-between gap-3">
+            <span className="flex items-center gap-3">
+              Pre-close exceptions
+              <Badge variant="secondary">{flagged.length} flagged</Badge>
+            </span>
+            <div className="flex items-center gap-2">
+              <a
+                href={`/close/export?year=${selected.fiscalYear}&period=${selected.periodNumber}&format=csv`}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-border bg-secondary/40 px-4 text-sm font-bold tracking-tight text-foreground backdrop-blur-sm transition-all duration-200 outline-none hover:-translate-y-0.5 hover:border-accent/60 hover:text-accent focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              >
+                <Download className="size-4" />
+                Export CSV
+              </a>
+              <a
+                href={`/close/export?year=${selected.fiscalYear}&period=${selected.periodNumber}&format=xlsx`}
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-full border border-border bg-secondary/40 px-4 text-sm font-bold tracking-tight text-foreground backdrop-blur-sm transition-all duration-200 outline-none hover:-translate-y-0.5 hover:border-primary/60 hover:text-primary focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              >
+                <Download className="size-4" />
+                Export XLSX
+              </a>
+            </div>
           </CardTitle>
         </CardHeader>
         <CardContent>

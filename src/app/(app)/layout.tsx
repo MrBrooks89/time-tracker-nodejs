@@ -1,14 +1,12 @@
 import { Clock } from "lucide-react";
 
 import { requireUser } from "@/lib/session";
-import { canManagePeople } from "@/lib/permissions";
 import { AppNav } from "@/components/app-nav";
 import { SignOutButton } from "@/components/sign-out-button";
 import { Badge } from "@/components/ui/badge";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
-  const manage = canManagePeople(user.role);
 
   return (
     <div className="flex min-h-dvh flex-col lg:flex-row">
@@ -26,11 +24,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </div>
 
         <div className="border-t border-sidebar-border px-2 py-2 lg:hidden">
-          <AppNav manage={manage} orientation="horizontal" />
+          <AppNav role={user.role} orientation="horizontal" />
         </div>
 
         <div className="hidden flex-1 flex-col px-3 py-4 lg:flex">
-          <AppNav manage={manage} />
+          <AppNav role={user.role} />
         </div>
 
         <div className="hidden flex-col gap-3 border-t border-sidebar-border px-4 py-4 lg:flex lg:px-6">

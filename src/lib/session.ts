@@ -3,7 +3,15 @@ import { redirect } from "next/navigation";
 
 import { auth } from "./auth";
 
-export type Role = "admin" | "manager" | "employee";
+// Section 1.4 roles: the three base roles plus the read-only/scoped viewers
+// (finance_viewer, leadership) and the project-scoped project_manager.
+export type Role =
+  | "admin"
+  | "manager"
+  | "employee"
+  | "finance_viewer"
+  | "leadership"
+  | "project_manager";
 
 export interface SessionUser {
   id: string;

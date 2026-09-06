@@ -317,6 +317,83 @@ async function seed() {
   await insertBatched((rows) => db.insert(userTable).values(rows), userRows);
   await insertBatched((rows) => db.insert(accountTable).values(rows), accountRows);
 
+  // -- 2b. Section 1.4 demo accounts -----------------------------------------
+  // Standalone staff accounts (not dataset partners): they don't file
+  // timesheets and stay out of the assignment/timesheet generators below.
+  // finance_viewer/leadership are excluded from compliance via
+  // TIMESHEET_EXEMPT_ROLES; the PM is a normal (non-filing) partner.
+  const demoAccounts: Array<{
+    name: string;
+    email: string;
+    role: "finance_viewer" | "leadership" | "project_manager";
+    title: string;
+    team: string;
+    partnerCode: string;
+  }> = [
+    {
+      name: "Via Serrano",
+      email: "finance.via@hackathon.com",
+      role: "finance_viewer",
+      title: "Finance Analyst",
+      team: "Finance",
+      partnerCode: "FIN-VIA",
+    },
+    {
+      name: "Leland Brooks",
+      email: "leland.lead@hackathon.com",
+      role: "leadership",
+      title: "Portfolio Lead",
+      team: "Leadership",
+      partnerCode: "LEAD-LELAND",
+    },
+    {
+      name: "Pat Calloway",
+      email: "pm.pat@hackathon.com",
+      role: "project_manager",
+      title: "Project Manager",
+      team: "Delivery",
+      partnerCode: "PM-PAT",
+    },
+  ];
+
+  const demoUserRows: Array<typeof userTable.$inferInsert> = [];
+  const demoAccountRows: Array<typeof accountTable.$inferInsert> = [];
+  const demoIdByEmail = new Map<string, string>();
+  for (const demo of demoAccounts) {
+    const id = randomUUID();
+    demoIdByEmail.set(demo.email, id);
+    demoUserRows.push({
+      id,
+      name: demo.name,
+      email: demo.email,
+      emailVerified: false,
+      role: demo.role,
+      isActive: true,
+      partnerCode: demo.partnerCode,
+      title: demo.title,
+      team: demo.team,
+      employmentType: "full_time",
+      standardWeeklyHours: 40,
+      createdAt: now,
+      updatedAt: now,
+    });
+    demoAccountRows.push({
+      id: randomUUID(),
+      accountId: id,
+      providerId: "credential",
+      userId: id,
+      password: passwordHash,
+      issuer: "local:credential",
+      createdAt: now,
+      updatedAt: now,
+    });
+  }
+  await db.insert(userTable).values(demoUserRows);
+  await db.insert(accountTable).values(demoAccountRows);
+  for (const [email, id] of demoIdByEmail) {
+    idByEmail.set(email, id);
+  }
+
   const activeUsers = users.filter((u) => u.isActive);
   const inactiveUsers = users.filter((u) => !u.isActive);
   const admin = users.find((u) => u.partner.email === adminEmail)!;
@@ -348,6 +425,22 @@ async function seed() {
   );
   await insertBatched((rows) => db.insert(projectTable).values(rows), projectRows);
 
+  // Section 1.4: guarantee the project_manager demo account manages at least
+  // two active projects (with seeded entries) so the PM role is demonstrable.
+  const patId = idByEmail.get("pm.pat@hackathon.com");
+  if (patId) {
+    const pmDemoTargets = dataset.projects
+      .filter((p) => p.status === "active")
+      .slice(0, 2)
+      .map((p) => projectIdByNumber.get(p.number)!);
+    for (const projectId of pmDemoTargets) {
+      await db
+        .update(projectTable)
+        .set({ projectManagerId: patId, updatedAt: now })
+        .where(eq(projectTable.id, projectId));
+    }
+  }
+
   const activeProjectIds = dataset.projects
     .filter((p) => p.status === "active")
     .map((p) => projectIdByNumber.get(p.number)!);
@@ -372,6 +465,22 @@ async function seed() {
       categoryIdByName.set(c.name, id);
       return { id, group: c.group, name: c.name, description: c.description };
     });
+
+  // FC-010: holiday OOO pre-population requires an "Out of Office"
+  // non-project category — guarantee one exists even if the dataset omits
+  // it (kept only when the dataset already provides it).
+  if (!categoryIdByName.has("Out of Office")) {
+    const id = randomUUID();
+    categoryIdByName.set("Out of Office", id);
+    categoryRows.push({
+      id,
+      group: "Leave",
+      name: "Out of Office",
+      description:
+        "Auto-inserted hours for observed company holidays; adjustable like any entry.",
+    });
+  }
+
   await db.insert(nonProjectCategoryTable).values(categoryRows);
 
   // -- 5. Classification rules ----------------------------------------------

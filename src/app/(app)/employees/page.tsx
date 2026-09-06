@@ -79,6 +79,12 @@ export default async function EmployeesPage() {
     employmentType: item.employmentType,
     standardWeeklyHours: item.standardWeeklyHours,
     assignmentIds: assignmentIdsByUser.get(item.id) ?? [],
+    // TS-021/022 delegated entry: admins can open any partner's week.
+    // The /week page re-verifies the role server-side.
+    weekHref:
+      currentUser.role === "admin" && item.id !== currentUser.id
+        ? `/week?user=${encodeURIComponent(item.id)}`
+        : null,
   }));
 
   return (
