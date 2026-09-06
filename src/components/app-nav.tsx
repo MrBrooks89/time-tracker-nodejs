@@ -4,15 +4,19 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   BarChart3,
+  BellRing,
   CalendarDays,
+  CalendarRange,
   ClipboardCheck,
   FolderKanban,
   LayoutDashboard,
+  ScrollText,
   Users,
   type LucideIcon,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import type { Role } from "@/lib/session";
 
 export interface NavItem {
   label: string;
@@ -26,6 +30,9 @@ const iconMap: Record<string, LucideIcon> = {
   approvals: ClipboardCheck,
   employees: Users,
   projects: FolderKanban,
+  calendar: CalendarRange,
+  audit: ScrollText,
+  reminders: BellRing,
 };
 
 const baseItems: NavItem[] = [
@@ -40,22 +47,52 @@ const manageItems: NavItem[] = [
   { label: "Projects", href: "/projects" },
 ];
 
+// Admin-only pages (DA-009 audit viewer, FC-003/FC-008 calendar admin,
+// TS-019/020 reminders) — the nav links follow the same gate as the
+// server-side requireRole checks.
+const adminItems: NavItem[] = [
+  { label: "Calendar", href: "/calendar" },
+  { label: "Reminders", href: "/reminders" },
+  { label: "Audit", href: "/audit" },
+];
+
+// Section 1.4: per-role nav visibility. This is COSMETIC ONLY — every page
+// and server action re-verifies the role server-side (permissions.ts).
+const roleItems: Record<Role, NavItem[]> = {
+  admin: [...baseItems, ...manageItems, ...adminItems],
+  manager: [...baseItems, ...manageItems],
+  employee: baseItems,
+  // finance_viewer: classification/actuals totals only.
+  finance_viewer: [{ label: "Reports", href: "/reports" }],
+  // leadership: read-only dashboards + reports.
+  leadership: [
+    { label: "Dashboard", href: "/" },
+    { label: "Reports", href: "/reports" },
+  ],
+  // project_manager: dashboard, their projects, project-scoped reports.
+  project_manager: [
+    { label: "Dashboard", href: "/" },
+    { label: "Projects", href: "/projects" },
+    { label: "Reports", href: "/reports" },
+  ],
+};
+
 function itemKey(href: string): string {
   return href.replace(/^\//, "");
 }
 
 export function AppNav({
-  manage,
+  role,
   className,
   orientation = "vertical",
 }: {
-  manage: boolean;
+  role: Role;
   className?: string;
   orientation?: "vertical" | "horizontal";
 }) {
   const pathname = usePathname();
 
-  const items = manage ? [...baseItems, ...manageItems] : baseItems;
+  const items = roleItems[role];
 
   function isActive(href: string) {
     if (href === "/") return pathname === "/";

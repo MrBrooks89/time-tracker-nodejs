@@ -9,7 +9,12 @@ across a 4-4-5 fiscal calendar.
 
 - **Weekly timesheets** — grid entry per day with project/task-code or non-project
   categories, hands-on flags, and notes
-- **Favorites** — pin project/task-code combos for quick entry in the week grid
+- **Favorites** — pin/unpin project/task-code combos (star toggle) for quick entry
+  in the week grid
+- **Delegated entry** — admins can open and edit any partner's week on their behalf;
+  every delegated save/submit is attributed via `enteredBy` and the audit trail
+- **Holiday pre-population** — observed holidays auto-insert an adjustable Out of
+  Office entry when the week opens
 - **Timesheet state machine** — `not_started → in_progress → submitted → in_correction → approved → locked`
 - **Approval workflow** — managers/admins review submitted weeks in an approval queue;
   rejection sends the sheet back to the partner for correction. No self-approval —
@@ -18,14 +23,22 @@ across a 4-4-5 fiscal calendar.
 - **Capex/opex classification** — task-code rules resolve each entry's classification,
   with effective dates
 - **Fiscal calendar** — FY26–FY27 4-4-5-style periods (12 periods/year) with holiday
-  observance logic
-- **Roles & permissions** — admin, manager, employee; managers/admins manage people and
-  project assignments
+  observance logic; admins can maintain holidays and generate future-year periods
+- **Roles & permissions** — admin, manager, employee, plus finance_viewer,
+  leadership, and project_manager (Section 1.4); managers/admins manage people
+  and project assignments, project managers manage their own project teams
 - **Reports** — Time Spend, Period Actuals, Compliance, and CapEx/Opex tabs, each
-  exportable as CSV or XLSX
+exportable as CSV or XLSX; restated periods show an as-of "Restated" badge
 - **Period close cycle** — admins initiate a fiscal-period close: exception report
   (unsubmitted weeks, hours outliers) → correction window (5 business days) → finalize
   (sheets lock) → reopen if needed
+- **Locked-period corrections** — admins can correct locked weeks with a mandatory
+  reason; every correction is logged (correction + audit trail) and marks the
+  period as restated
+- **Audit trail** — append-only log of entries, submissions, approvals, close
+  events, people/project changes, and corrections; admin audit viewer at `/audit`
+- **Reminders** — deadline-derived list of unsubmitted due/past-due timesheets with
+  an admin ad-hoc reminder trigger, history, and CSV export (in-app; no SMTP)
 
 ## Tech Stack
 
@@ -73,11 +86,31 @@ The SQLite database lives at `data/app.db` (gitignored). Delete it and re-run
 
 All seeded accounts share the password `hackathon2026`.
 
-| Role    | Email                        |
-| ------- | ---------------------------- |
-| Admin   | aaron.alvarez@hackathon.com  |
-| Manager | fatima.kim@hackathon.com     |
-| Employee| ana.bell@hackathon.com        |
+| Role             | Email                        |
+| ---------------- | ---------------------------- |
+| Admin            | aaron.alvarez@hackathon.com  |
+| Manager          | fatima.kim@hackathon.com     |
+| Employee         | ana.bell@hackathon.com       |
+| Finance viewer   | finance.via@hackathon.com    |
+| Leadership       | leland.lead@hackathon.com    |
+| Project manager  | pm.pat@hackathon.com         |
+
+## Roles
+
+Capabilities are enforced server-side (`src/lib/permissions.ts`) — nav gating
+is cosmetic only.
+
+| Role              | Capabilities |
+| ----------------- | ------------ |
+| **Admin**         | Everything: week entry (incl. delegated entry for any partner), approvals, people & projects admin, period close, corrections, audit trail, all reports |
+| **Manager**       | Week entry, approvals for direct reports, people & projects admin, all reports |
+| **Employee**      | Own week entry, own reports/compliance view |
+| **Finance viewer**| Read-only CapEx/Opex classification and actuals **totals** — no per-partner rows, no partner filter, no week entry, no admin surfaces |
+| **Leadership**    | Read-only dashboards and reports (manager-level visibility, partner filters included) — no mutations anywhere |
+| **Project manager**| Actuals and reports scoped to the projects they manage; can assign/unassign partners on **their** projects only — no people admin, approvals, or close |
+
+The seeded project manager (Pat Calloway) manages the first two active seeded
+projects, so the scoped PM view is demonstrable right after seeding.
 
 ## Scripts
 

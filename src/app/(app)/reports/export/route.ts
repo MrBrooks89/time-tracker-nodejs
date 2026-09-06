@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
-import { canManagePeople } from "@/lib/permissions";
+import {
+  allowedReportTabs,
+  canFilterReportsByPartner,
+  type ReportTab,
+} from "@/lib/permissions";
 import { getSessionUser } from "@/lib/session";
 import {
   csvEscape,
@@ -44,7 +48,18 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const params = url.searchParams;
   const format = params.get("format") === "xlsx" ? "xlsx" : "csv";
-  const tab = params.get("tab") ?? "dashboard";
+  const rawTab = params.get("tab") ?? "dashboard";
+
+  // Section 1.4: server-side tab gating — the export route enforces the same
+  // per-role tab allowlist as the reports page (nav gating is cosmetic only).
+  const allowedTabs = allowedReportTabs(viewer.role);
+  if (!allowedTabs.includes(rawTab as ReportTab)) {
+    return NextResponse.json(
+      { error: "This report is not available for your role." },
+      { status: 403 },
+    );
+  }
+  const tab: string = rawTab;
 
   const scopeData = resolveScope({
     week: params.get("week") ?? undefined,
@@ -56,12 +71,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unknown fiscal range" }, { status: 400 });
   }
 
-  const canManage = canManagePeople(viewer.role);
+  const canFilter = canFilterReportsByPartner(viewer.role);
   const filters = {
-    team: canManage ? (params.get("team") ?? undefined) : undefined,
-    managerId: canManage ? (params.get("managerId") ?? undefined) : undefined,
+    team: canFilter ? (params.get("team") ?? undefined) : undefined,
+    managerId: canFilter ? (params.get("managerId") ?? undefined) : undefined,
     projectId: params.get("projectId") ?? undefined,
-    userId: canManage ? (params.get("userId") ?? undefined) : undefined,
+    userId: canFilter ? (params.get("userId") ?? undefined) : undefined,
     categoryId: params.get("categoryId") ?? undefined,
   };
 

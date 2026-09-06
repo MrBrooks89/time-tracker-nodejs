@@ -16,13 +16,23 @@ import {
   user as userTable,
 } from "@/db/schema";
 import { requirePeopleManager } from "@/lib/permissions";
+import { recordAudit } from "@/lib/audit";
 
 export interface ActionResult {
   ok: boolean;
   error?: string;
 }
 
-const roleValues = ["admin", "manager", "employee"] as const;
+// Section 1.4: the full role set admins/managers can assign from the
+// employees directory. Matches the schema enum (migration 0002).
+const roleValues = [
+  "admin",
+  "manager",
+  "employee",
+  "finance_viewer",
+  "leadership",
+  "project_manager",
+] as const;
 type RoleValue = (typeof roleValues)[number];
 
 function isRole(value: string): value is RoleValue {
@@ -39,7 +49,7 @@ function revalidatePeoplePaths() {
 export async function createEmployee(
   formData: FormData,
 ): Promise<ActionResult> {
-  await requirePeopleManager();
+  const currentUser = await requirePeopleManager();
 
   const name = String(formData.get("name") ?? "").trim();
   const email = String(formData.get("email") ?? "").trim().toLowerCase();
@@ -101,6 +111,15 @@ export async function createEmployee(
           updatedAt: now,
         })
         .run();
+
+      // DA-009: account creation is audited atomically (no password material).
+      recordAudit(tx, {
+        actorId: currentUser.id,
+        action: "person_create",
+        entityType: "user",
+        entityId: userId,
+        newValue: JSON.stringify({ name, email, role }),
+      });
     });
   } catch {
     return { ok: false, error: "A user with this email already exists." };
@@ -126,6 +145,7 @@ export async function updateEmployee(
   const [target] = await db
     .select({
       id: userTable.id,
+      name: userTable.name,
       role: userTable.role,
       isActive: userTable.isActive,
     })
@@ -147,11 +167,43 @@ export async function updateEmployee(
     return { ok: false, error: "You cannot deactivate your own account." };
   }
 
+  // DA-009: deactivation is its own audit action; any other change is a
+  // plain update. Old/new values are compact JSON of the mutable fields.
+  const deactivated = target.isActive && !nextIsActive;
+  const auditAction = deactivated ? "person_deactivate" : "person_update";
+
   try {
-    await db
-      .update(userTable)
-      .set({ name, role: nextRole, isActive: nextIsActive, updatedAt: new Date() })
-      .where(eq(userTable.id, id));
+    // Sync callback + .run(): better-sqlite3 transactions reject promise-
+    // returning callbacks, so the update and audit write are atomic.
+    db.transaction((tx) => {
+      tx
+        .update(userTable)
+        .set({
+          name,
+          role: nextRole,
+          isActive: nextIsActive,
+          updatedAt: new Date(),
+        })
+        .where(eq(userTable.id, id))
+        .run();
+
+      recordAudit(tx, {
+        actorId: currentUser.id,
+        action: auditAction,
+        entityType: "user",
+        entityId: id,
+        oldValue: JSON.stringify({
+          name: target.name,
+          role: target.role,
+          isActive: target.isActive,
+        }),
+        newValue: JSON.stringify({
+          name,
+          role: nextRole,
+          isActive: nextIsActive,
+        }),
+      });
+    });
   } catch {
     return { ok: false, error: "Could not save this employee." };
   }

@@ -1,9 +1,10 @@
-import { and, asc, eq, gte, inArray, isNotNull, lte, sql, type SQL } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, isNotNull, lte, notInArray, or, sql, type SQL } from "drizzle-orm";
 import { alias } from "drizzle-orm/sqlite-core";
 
 import { db } from "@/db";
 import {
   nonProjectCategory as categoryTable,
+  periodClose as periodCloseTable,
   project as projectTable,
   taskCode as taskCodeTable,
   timeEntry as timeEntryTable,
@@ -18,6 +19,7 @@ import {
   weekDates,
 } from "@/lib/fiscal";
 import type { SessionUser } from "@/lib/session";
+import { TIMESHEET_EXEMPT_ROLES } from "@/lib/permissions";
 
 // Aliased users table so entries can join the entry owner's manager
 // without clashing with the primary userTable join.
@@ -123,6 +125,39 @@ function scopeToDates(scope: ReportScope): { from: string; to: string } {
   };
 }
 
+// TS-029: the restated-as-of timestamp for the reporting scope. A week/period
+// scope maps to one period_close row; quarter/year scopes cover several, in
+// which case the latest restatedAt wins (any restated period in range means
+// the report contains restated data). Null when nothing was restated.
+export async function getRestatedAt(scope: ReportScope): Promise<Date | null> {
+  const { from, to } = scopeToDates(scope);
+  const periods = FISCAL_PERIODS.filter(
+    (p) => p.startDate <= to && p.endDate >= from,
+  );
+  if (periods.length === 0) return null;
+
+  const rows = await db
+    .select({ restatedAt: periodCloseTable.restatedAt })
+    .from(periodCloseTable)
+    .where(
+      or(
+        ...periods.map((p) =>
+          and(
+            eq(periodCloseTable.fiscalYear, p.fiscalYear),
+            eq(periodCloseTable.periodNumber, p.periodNumber),
+          ),
+        ),
+      ),
+    );
+
+  const stamps = rows
+    .map((r) => r.restatedAt)
+    .filter((d): d is Date => d !== null)
+    .map((d) => d.getTime());
+  if (stamps.length === 0) return null;
+  return new Date(Math.max(...stamps));
+}
+
 export function priorPeriodOf(scope: ReportScope): ReportScope | null {
   if (scope.kind === "week") {
     return { kind: "week", weekStartDate: shiftWeek(scope.weekStartDate, -1) };
@@ -192,6 +227,13 @@ export async function getReportEntries(
   if (viewer.role === "employee") {
     conditions.push(eq(timeEntryTable.timesheetId, timesheetTable.id));
     conditions.push(eq(timesheetTable.userId, viewer.id));
+  }
+
+  // Section 1.4: project managers only see actuals for the projects they
+  // manage. The join to project is a leftJoin, so the condition also drops
+  // non-project (category) rows — those are not tied to any managed project.
+  if (viewer.role === "project_manager") {
+    conditions.push(eq(projectTable.projectManagerId, viewer.id));
   }
 
   if (filters.userId) {
@@ -318,6 +360,11 @@ export async function getActualsReport(
 
   const round = (v: number) => Math.round(v * 4) / 4;
 
+  // Section 1.4: finance_viewer gets aggregate totals only — never
+  // per-partner rows or entry-level data, even if a page/export tries to
+  // render them. The stripping happens here (server-side), not just in the UI.
+  const partnerDetailVisible = viewer.role !== "finance_viewer";
+
   return {
     label,
     from: scopeToDates(scope).from,
@@ -325,7 +372,9 @@ export async function getActualsReport(
     total: round(total),
     capex: round(capex),
     opex: round(opex),
-    byPartner: groupBy(entries, (e) => e.userName, (e) => e.userName),
+    byPartner: partnerDetailVisible
+      ? groupBy(entries, (e) => e.userName, (e) => e.userName)
+      : [],
     byProject: groupBy(
       entries,
       (e) => e.projectName,
@@ -342,7 +391,8 @@ export async function getActualsReport(
       (e) => e.taskCodeName ?? "—",
     ),
     prior,
-    entries,
+    // finance_viewer never receives entry-level rows (per-person detail).
+    entries: partnerDetailVisible ? entries : [],
   };
 }
 
@@ -373,8 +423,19 @@ export async function getComplianceReport(
     }
   }
 
+  // Section 1.4: compliance is a per-partner submission report — finance_viewer
+  // and project_manager have no tab for it and get no data if forced. Everyone
+  // else: employees only see their own submission status; managers/admins/
+  // leadership see all active (timesheet-filing) users.
+  if (viewer.role === "finance_viewer" || viewer.role === "project_manager") {
+    return [];
+  }
+
   // Employees only see their own submission status; managers/admins see all active users.
-  const userConditions = [eq(userTable.isActive, true)];
+  const userConditions = [
+    eq(userTable.isActive, true),
+    notInArray(userTable.role, TIMESHEET_EXEMPT_ROLES),
+  ];
   if (viewer.role === "employee") {
     userConditions.push(eq(userTable.id, viewer.id));
   }
@@ -486,7 +547,9 @@ export async function getClassificationReport(
     byProject: [...projectMap.values()].sort((a, b) => b.hours - a.hours),
     byTaskCode: [...codeMap.values()].sort((a, b) => b.hours - a.hours),
     total: { hours: round(total.total), capex: round(total.capex), opex: round(total.opex) },
-    entries,
+    // Section 1.4: finance_viewer gets classification totals/aggregates only,
+    // never the entry-level (per-person) rows.
+    entries: viewer.role === "finance_viewer" ? [] : entries,
   };
 }
 
@@ -619,8 +682,17 @@ export interface ReportOptions {
   categories: Array<{ id: string; name: string }>;
 }
 
-export async function getReportOptions(): Promise<ReportOptions> {
-  const [teams, projects, users, categories, actualManagers] = await Promise.all([
+// Section 1.4: project managers may only filter reports by the projects
+// they manage — the reports page narrows the project dropdown to this set.
+export async function getManagedProjectIds(userId: string): Promise<string[]> {
+  const rows = await db
+    .select({ id: projectTable.id })
+    .from(projectTable)
+    .where(eq(projectTable.projectManagerId, userId));
+  return rows.map((r) => r.id);
+}
+
+export async function getReportOptions(): Promise<ReportOptions> {  const [teams, projects, users, categories, actualManagers] = await Promise.all([
     db
       .selectDistinct({ team: userTable.team })
       .from(userTable)

@@ -15,6 +15,13 @@
       "when": 1788456601645,
       "tag": "0001_phase4_approval_close",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788695737439,
+      "tag": "0002_faulty_tattoo",
+      "breakpoints": true
     }
   ]
 }

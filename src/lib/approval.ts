@@ -12,7 +12,15 @@ export type SheetState =
   | "approved"
   | "locked";
 
-export type ViewerRole = "admin" | "manager" | "employee";
+// Section 1.4: all roles fit the viewer type, but isApproverRole keeps the
+// decision rights limited to admin/manager (new roles never approve).
+export type ViewerRole =
+  | "admin"
+  | "manager"
+  | "employee"
+  | "finance_viewer"
+  | "leadership"
+  | "project_manager";
 
 function isApproverRole(role: ViewerRole): boolean {
   return role === "manager" || role === "admin";

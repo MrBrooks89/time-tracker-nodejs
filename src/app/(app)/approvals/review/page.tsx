@@ -8,6 +8,7 @@ import { user as userTable } from "@/db/schema";
 import { canApprove } from "@/lib/approval";
 import { isWeekStart } from "@/lib/fiscal";
 import { requireRole } from "@/lib/permissions";
+import type { Role } from "@/lib/session";
 import { getCategories, getTaskCodes, getWeekData } from "@/lib/week-data";
 import { formatHours } from "@/lib/entry-validation";
 import { Badge } from "@/components/ui/badge";
@@ -53,7 +54,7 @@ function dayLabel(dateStr: string): string {
 // Same eligibility rules as the queue (D2/D3): the viewer must be the
 // effective approver for this partner, and never the sheet owner.
 async function loadEligibleTarget(
-  viewer: { id: string; role: "admin" | "manager" | "employee" },
+  viewer: { id: string; role: Role },
   userId: string,
 ): Promise<{ managerId: string | null } | null> {
   const ownerFilter =
