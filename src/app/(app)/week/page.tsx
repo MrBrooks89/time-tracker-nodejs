@@ -2,7 +2,6 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 
 import { currentWeek, addWeeks, isWeekStart } from "@/lib/fiscal";
-import { canManagePeople } from "@/lib/permissions";
 import { requireUser } from "@/lib/session";
 import {
   getActiveAssignments,
@@ -64,12 +63,12 @@ export default async function WeekPage({
     in_progress: "In progress",
     submitted: "Submitted",
     in_correction: "In correction",
+    approved: "Approved",
     locked: "Locked",
   };
 
   const nextWeek = addWeeks(requested, 1);
   const nextEnterable = data.enterable && nextWeek <= currentWeek();
-  const isManager = canManagePeople(user.role);
 
   return (
     <div className="flex flex-col gap-6">
@@ -87,7 +86,7 @@ export default async function WeekPage({
               </Badge>
               <Badge
                 variant={
-                  data.state === "submitted"
+                  data.state === "submitted" || data.state === "approved"
                     ? "default"
                     : data.state === "locked"
                       ? "outline"
@@ -127,9 +126,17 @@ export default async function WeekPage({
                 Next ›
               </span>
             )}
-            {isManager ? <WeekAdminButtons weekStartDate={requested} /> : null}
+            {user.role === "admin" ? <WeekAdminButtons weekStartDate={requested} /> : null}
           </div>
         </div>
+        {data.state === "in_correction" && data.latestRejectionNote ? (
+          <div className="flex flex-col gap-1 rounded-xl border border-destructive/30 bg-destructive/10 p-4">
+            <p className="micro-label">Manager note / Action needed</p>
+            <p className="text-sm leading-relaxed text-foreground">
+              {data.latestRejectionNote}
+            </p>
+          </div>
+        ) : null}
       </section>
 
       <WeekGrid

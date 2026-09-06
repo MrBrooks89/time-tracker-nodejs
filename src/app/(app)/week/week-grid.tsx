@@ -45,7 +45,13 @@ interface WeekGridProps {
   taskCodes: TaskCodeInfo[];
   categories: CategoryInfo[];
   favorites: FavoriteInfo[];
-  state: "not_started" | "in_progress" | "submitted" | "in_correction" | "locked";
+  state:
+    | "not_started"
+    | "in_progress"
+    | "submitted"
+    | "in_correction"
+    | "approved"
+    | "locked";
   totalHours: number;
   expectedHours: number;
   standardWeeklyHours: number;
@@ -203,6 +209,13 @@ export function WeekGrid(props: WeekGridProps) {
         <div className="blueprint-surface rounded-xl p-4">
           <p className="micro-label">
             Submitted — edits reopen this week.
+          </p>
+        </div>
+      ) : null}
+      {props.state === "approved" ? (
+        <div className="blueprint-surface rounded-xl p-4">
+          <p className="micro-label">
+            Approved — editing will revert to draft and require re-approval.
           </p>
         </div>
       ) : null}

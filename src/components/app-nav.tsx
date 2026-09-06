@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import {
   BarChart3,
   CalendarDays,
+  ClipboardCheck,
   FolderKanban,
   LayoutDashboard,
   Users,
@@ -22,6 +23,7 @@ const iconMap: Record<string, LucideIcon> = {
   dashboard: LayoutDashboard,
   week: CalendarDays,
   reports: BarChart3,
+  approvals: ClipboardCheck,
   employees: Users,
   projects: FolderKanban,
 };
@@ -33,6 +35,7 @@ const baseItems: NavItem[] = [
 ];
 
 const manageItems: NavItem[] = [
+  { label: "Approvals", href: "/approvals" },
   { label: "Employees", href: "/employees" },
   { label: "Projects", href: "/projects" },
 ];

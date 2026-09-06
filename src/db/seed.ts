@@ -13,16 +13,19 @@ import {
   fiscalPeriod as fiscalPeriodTable,
   holiday as holidayTable,
   nonProjectCategory as nonProjectCategoryTable,
+  periodClose as periodCloseTable,
   project as projectTable,
   projectAssignment as projectAssignmentTable,
   taskCode as taskCodeTable,
   timeEntry as timeEntryTable,
   timesheet as timesheetTable,
+  timesheetDecision as timesheetDecisionTable,
   user as userTable,
   verification as verificationTable,
   session as sessionTable,
   type NewTimeEntry,
   type NewTimesheet,
+  type NewTimesheetDecision,
 } from "./schema.ts";
 
 interface PartnerData {
@@ -179,7 +182,9 @@ async function seed() {
 
   // -- 1. Wipe tables in FK-safe order --------------------------------------
   await db.delete(timeEntryTable);
+  await db.delete(timesheetDecisionTable);
   await db.delete(timesheetTable);
+  await db.delete(periodCloseTable);
   await db.delete(favoriteTable);
   await db.delete(assignmentChangeTable);
   await db.delete(projectAssignmentTable);
@@ -239,6 +244,14 @@ async function seed() {
     managerEmailByTeam.set(team, picked.email);
   }
 
+  // App-role managers lead their own teams (Phase 4 D2: managers self-managed,
+  // so admin is their approver); their own sheets route to admin via the
+  // unmanaged rule.
+  for (const email of managerEmails) {
+    const partner = dataset.partners.find((p) => p.email === email);
+    if (partner) managerEmailByTeam.set(partner.team, email);
+  }
+
   const users: SeededUser[] = [];
   const userRows: Array<typeof userTable.$inferInsert> = [];
   const accountRows: Array<typeof accountTable.$inferInsert> = [];
@@ -294,6 +307,11 @@ async function seed() {
   for (const u of users) {
     const teamManagerEmail = managerEmailByTeam.get(u.partner.team);
     u.managerId = teamManagerEmail === u.partner.email ? null : idByEmail.get(teamManagerEmail!) ?? null;
+  }
+
+  // Sync resolved managerId into the insert rows (same order as users array).
+  for (let i = 0; i < users.length; i += 1) {
+    userRows[i].managerId = users[i].managerId;
   }
 
   await insertBatched((rows) => db.insert(userTable).values(rows), userRows);
@@ -799,8 +817,66 @@ async function seed() {
     }
   }
 
+  // -- 9b. In-correction demo rows (Phase 4 approval workflow) ----------------
+  // Flag a few recent submitted weeks: sheet → in_correction plus a matching
+  // reject decision from the partner's manager. All other historical weeks
+  // stay submitted — approval history starts now, no backfilled decisions.
+  const p11Period = dataset.fiscalPeriods.find(
+    (p) => p.fiscalYear === 2026 && p.periodNumber === 11,
+  )!;
+  const p11Weeks: string[] = [];
+  {
+    let ws = weekStartOf(p11Period.startDate);
+    while (parseDate(ws) <= parseDate(p11Period.endDate)) {
+      p11Weeks.push(ws);
+      ws = formatDate(addDays(parseDate(ws), 7));
+    }
+  }
+
+  const rejectionNotes = [
+    "Hours missing for Thursday — please complete and resubmit.",
+    "Total hours are well below your standard week — please review and resubmit.",
+    "Tuesday's entry points to the wrong project — please correct and resubmit.",
+  ];
+
+  // Walk P11 weeks newest-first and flag up to 3 managed employees' sheets,
+  // so the demo survives even if the newest week is sparsely seeded.
+  const decisionRows: NewTimesheetDecision[] = [];
+  const flaggedUserIds = new Set<string>();
+  for (const weekStartDate of [...p11Weeks].reverse()) {
+    for (const u of activeUsers) {
+      if (decisionRows.length >= 3) break;
+      if (
+        u.role !== "employee" ||
+        u.managerId === null ||
+        flaggedUserIds.has(u.id)
+      ) {
+        continue;
+      }
+      const sheet = timesheetRows.find(
+        (t) => t.userId === u.id && t.weekStartDate === weekStartDate,
+      );
+      if (!sheet) continue;
+      sheet.state = "in_correction";
+      flaggedUserIds.add(u.id);
+      decisionRows.push({
+        id: randomUUID(),
+        timesheetId: sheet.id,
+        decision: "reject",
+        decidedBy: u.managerId,
+        note: rejectionNotes[decisionRows.length % rejectionNotes.length],
+        // Manager reviews a couple of hours after the deadline-morning submission.
+        decidedAt: new Date(sheet.submittedAt!.getTime() + 2 * 3600000),
+      });
+    }
+    if (decisionRows.length >= 3) break;
+  }
+
   await insertBatched((rows) => db.insert(timesheetTable).values(rows), timesheetRows);
   await insertBatched((rows) => db.insert(timeEntryTable).values(rows), entryRows);
+  if (decisionRows.length > 0) {
+    await db.insert(timesheetDecisionTable).values(decisionRows);
+  }
 
   // -- 10. Favorites -----------------------------------------------------------
   const favoriteRows: Array<typeof favoriteTable.$inferInsert> = [];
@@ -847,6 +923,13 @@ async function seed() {
     .select({ state: timesheetTable.state, value: count() })
     .from(timesheetTable)
     .groupBy(timesheetTable.state);
+  const decisionRowsByType = await db
+    .select({ decision: timesheetDecisionTable.decision, value: count() })
+    .from(timesheetDecisionTable)
+    .groupBy(timesheetDecisionTable.decision);
+  const [periodCloseCount] = await db
+    .select({ value: count() })
+    .from(periodCloseTable);
   const [entryCount] = await db.select({ value: count() }).from(timeEntryTable);
   const hoursRow = await db
     .select({
@@ -870,6 +953,10 @@ async function seed() {
   console.log(`Holidays: ${holidayCount?.value}`);
   console.log(`Project assignments: ${assignmentCount?.value}`);
   for (const r of stateRows) console.log(`  timesheet ${r.state}: ${r.value}`);
+  for (const r of decisionRowsByType) {
+    console.log(`  decision ${r.decision}: ${r.value}`);
+  }
+  console.log(`Period closes: ${periodCloseCount?.value}`);
   console.log(`Time entries: ${entryCount?.value}`);
   console.log(`Total hours: ${totalHours}`);
   console.log(

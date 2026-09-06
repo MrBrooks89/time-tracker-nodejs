@@ -4,7 +4,9 @@ import { currentWeek } from "@/lib/fiscal";
 import { canManagePeople } from "@/lib/permissions";
 import { requireUser } from "@/lib/session";
 import {
+  getApprovalQueue,
   getComplianceSnapshot,
+  getOwnLatestCorrection,
   getOwnOutstandingWeeks,
   getWeekData,
 } from "@/lib/week-data";
@@ -44,6 +46,7 @@ const stateLabels: Record<string, string> = {
   in_progress: "In progress",
   submitted: "Submitted",
   in_correction: "In correction",
+  approved: "Approved",
   locked: "Locked",
 };
 
@@ -53,14 +56,21 @@ export default async function DashboardPage() {
   const manage = canManagePeople(user.role);
 
   const week = currentWeek();
-  const [weekData, outstanding, compliance] = await Promise.all([
-    getWeekData(user.id, week),
-    getOwnOutstandingWeeks(user.id),
-    manage ? getComplianceSnapshot(4) : Promise.resolve([]),
-  ]);
+  const [weekData, outstanding, compliance, approvalQueue, correction] =
+    await Promise.all([
+      getWeekData(user.id, week),
+      getOwnOutstandingWeeks(user.id),
+      manage ? getComplianceSnapshot(4) : Promise.resolve([]),
+      manage
+        ? getApprovalQueue({ id: user.id, role: user.role })
+        : Promise.resolve([]),
+      getOwnLatestCorrection(user.id),
+    ]);
 
   const today = new Date().toISOString().slice(0, 10);
   const deadlinePast = weekData ? weekData.deadline < today : false;
+  const currentWeekInCorrection = weekData?.state === "in_correction";
+  const needsCorrection = currentWeekInCorrection || correction !== null;
 
   return (
     <div className="flex flex-col gap-6">
@@ -96,12 +106,36 @@ export default async function DashboardPage() {
               ? `${formatHoursSafe(weekData.totalHours)} / ${formatHoursSafe(weekData.expectedHours)}`
               : "—"}
           </p>
-          <Badge variant={weekData?.state === "submitted" ? "default" : "secondary"}>
+          <Badge
+            variant={
+              weekData?.state === "submitted" || weekData?.state === "approved"
+                ? "default"
+                : currentWeekInCorrection
+                  ? "destructive"
+                  : "secondary"
+            }
+          >
             {weekData ? (stateLabels[weekData.state] ?? weekData.state) : "Not started"}
           </Badge>
-          <p className="text-xs text-muted-foreground">
-            Week of {weekData ? formatDateShort(weekData.weekStartDate) : ""}
-          </p>
+          {needsCorrection ? (
+            <p className="text-xs leading-snug text-destructive">
+              Action needed:{" "}
+              {correction?.note ??
+                "your manager returned a week for correction."}{" "}
+              {correction ? (
+                <Link
+                  href={`/week?week=${encodeURIComponent(correction.weekStartDate)}`}
+                  className="font-semibold underline underline-offset-2 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+                >
+                  Fix week of {formatDateShort(correction.weekStartDate)}
+                </Link>
+              ) : null}
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Week of {weekData ? formatDateShort(weekData.weekStartDate) : ""}
+            </p>
+          )}
         </div>
 
         <div className="paper-card animate-scale-in flex flex-col gap-1.5 rounded-2xl p-5">
@@ -134,6 +168,30 @@ export default async function DashboardPage() {
           ) : null}
         </div>
       </div>
+
+      {manage ? (
+        <div className="paper-card animate-scale-in flex flex-col gap-3 rounded-2xl p-6 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex flex-col gap-1.5">
+            <p className="micro-label">Approvals / Attention</p>
+            <p className="font-display text-2xl font-bold tracking-tight">
+              {approvalQueue.length === 0
+                ? "No pending approvals"
+                : `${approvalQueue.length} pending ${approvalQueue.length === 1 ? "approval" : "approvals"}`}
+            </p>
+            <p className="text-xs text-muted-foreground">
+              {approvalQueue.length === 0
+                ? "Submitted timesheets from your team appear here."
+                : "Submitted timesheets from your team are waiting on your decision."}
+            </p>
+          </div>
+          <Link
+            href="/approvals"
+            className="command-strip inline-flex h-10 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-full px-5 text-sm font-bold tracking-tight text-primary-foreground shadow-[0_10px_32px_-12px_var(--primary)] outline-none transition-all duration-200 hover:-translate-y-0.5 hover:shadow-[0_14px_38px_-12px_var(--primary)] focus-visible:ring-[3px] focus-visible:ring-ring/50"
+          >
+            Review approvals
+          </Link>
+        </div>
+      ) : null}
 
       {manage ? (
         <Card className="animate-scale-in">
