@@ -24,7 +24,7 @@ export const auth = betterAuth({
   // Set explicitly (never via the BETTER_AUTH_URL env var) so stray .env values
   // cannot override the allowlist. Add the production domain when deploying.
   baseURL: {
-    allowedHosts: ["localhost:3000", "192.168.4.112:3000"],
+    allowedHosts: ["localhost:3000", "192.168.*.*:3000"],
     protocol: process.env.NODE_ENV === "development" ? "http" : "https",
   },
   user: {
