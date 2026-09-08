@@ -7,7 +7,7 @@
 // state the checkbox uses. Clear-cut codes render a deterministic echo
 // fetched from the route (TC-301 — no model call); judgment calls stream a
 // structured suggestion via useObject (TC-302/303). The panel hides itself
-// entirely when the helper is unavailable (no AI_GATEWAY_API_KEY — D4) and
+// entirely when the helper is unavailable (no TOKENROUTER_API_KEY — D4) and
 // states low confidence on model failures (TC-305).
 //
 // APIs verified against the bundled, version-matched docs (ai@7.0.93,

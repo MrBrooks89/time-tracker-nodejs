@@ -159,9 +159,9 @@ export function buildSuggestionPrompt(
     "- Business Enhancements is hard-ruled OpEx in the application. Your " +
       "suggestion for it is advisory review guidance only (candidate for " +
       "Finance/PMO elevation review), never a CapEx classification hint.",
-    "Respond with classification, confidence (high/medium/low), a short " +
-      "explanation, and judgmentCall (null unless the entry is a judgment " +
-      "call).",
+    "Output format: respond with a single JSON object that matches exactly " +
+      "this schema — no markdown fences, no prose before or after:\n" +
+      JSON.stringify(z.toJSONSchema(classificationSuggestionSchema)),
   ].join("\n\n");
 
   const contextLines = [

@@ -219,6 +219,19 @@ test("buildSuggestionPrompt: system embeds rule rows, criteria, and framing", ()
   assert.ok(system.includes("Never suggest capex"));
 });
 
+test("buildSuggestionPrompt: system embeds the output JSON schema", () => {
+  // Some OpenAI-compatible gateways route to models that ignore the
+  // response_format payload; the schema must also live in the prompt.
+  const { system } = buildSuggestionPrompt(
+    { taskCodeName: null, nonProjectCategoryName: "Administrative", weeklyHours: 4 },
+    RULE_ROWS,
+  );
+  assert.ok(system.includes("single JSON object"));
+  assert.ok(system.includes("no markdown fences"));
+  assert.ok(system.includes('"classification"'));
+  assert.ok(system.includes('"judgmentCall"'));
+});
+
 test("buildSuggestionPrompt: Manager Oversight entry surfaces hands-on guidance", () => {
   const { prompt } = buildSuggestionPrompt(
     {

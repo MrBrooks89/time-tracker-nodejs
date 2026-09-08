@@ -44,12 +44,12 @@ exportable as CSV or XLSX; restated periods show an as-of "Restated" badge
   deadline-day send (lazy on first navigation + a cron entry point at
   `/api/reminders/run`)
 - **AI classification helper** — advisory CapEx/OpEx suggestions in the week
-  grid (Vercel AI SDK + AI Gateway). Clear-cut task codes echo the
+  grid (Vercel AI SDK + TokenRouter). Clear-cut task codes echo the
   deterministic rule with no model call; judgment calls (Manager Oversight,
   high-hours Business Enhancements) stream a suggestion with confidence and
   explanation. Suggestions are advisory only — they never change the stored
   classification, and the helper hides itself entirely when no
-  `AI_GATEWAY_API_KEY` is configured
+  `TOKENROUTER_API_KEY` is configured
 - **Admin settings** — tolerances (max hours/day, hours-outlier threshold,
   correction-window length), reminder templates, and the AI model string are
   admin-configurable at `/settings` with no code change; every change is
@@ -156,7 +156,8 @@ Optional for local development; defaults are dev-only.
 | -------------------- | -------------------------------- | ------------------------------ |
 | `BETTER_AUTH_SECRET` | Auth session signing secret      | Dev-only fallback (insecure)   |
 | `SMTP_HOST` etc.     | Reminder/distribution email delivery (`SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`) | Unset → log-only mode |
-| `AI_GATEWAY_API_KEY` | Vercel AI Gateway key for the classification helper | Unset → helper hidden |
+| `TOKENROUTER_API_KEY` | TokenRouter key for the classification helper | Unset → helper hidden |
+| `TOKENROUTER_BASE_URL` | TokenRouter endpoint override | `https://api.tokenrouter.com/v1` |
 | `CRON_SECRET`        | Bearer secret for the `/api/reminders/run` cron entry point | Unset → admin session required |
 
 See `.env.example` for details. Set a real `BETTER_AUTH_SECRET` for anything
