@@ -1,12 +1,27 @@
 import { Clock } from "lucide-react";
+import { after } from "next/server";
 
 import { requireUser } from "@/lib/session";
+import { maybeRunScheduledReminders } from "@/lib/reminders";
 import { AppNav } from "@/components/app-nav";
 import { SignOutButton } from "@/components/sign-out-button";
 import { Badge } from "@/components/ui/badge";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
+
+  // D7: deadline-day scheduled reminders run lazily on the first
+  // authenticated navigation of the day (layouts render on RSC navigations
+  // only — not server actions or API routes). after() keeps the run off the
+  // render path; the run is idempotent and swallows its own errors, and the
+  // extra guard here means a reminder failure can never break navigation.
+  after(async () => {
+    try {
+      await maybeRunScheduledReminders();
+    } catch {
+      // Scheduled reminders are best-effort — never surface to the user.
+    }
+  });
 
   return (
     <div className="flex min-h-dvh flex-col lg:flex-row">

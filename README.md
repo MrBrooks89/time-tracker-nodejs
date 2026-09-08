@@ -37,8 +37,29 @@ exportable as CSV or XLSX; restated periods show an as-of "Restated" badge
   period as restated
 - **Audit trail** — append-only log of entries, submissions, approvals, close
   events, people/project changes, and corrections; admin audit viewer at `/audit`
-- **Reminders** — deadline-derived list of unsubmitted due/past-due timesheets with
-  an admin ad-hoc reminder trigger, history, and CSV export (in-app; no SMTP)
+- **Reminders** — deadline-derived list of unsubmitted due/past-due timesheets
+  with an admin ad-hoc reminder trigger, history, and CSV export; email
+  delivery via configurable SMTP (log-only `would_send` mode when SMTP is
+  not configured), admin-editable subject/body templates, and an automatic
+  deadline-day send (lazy on first navigation + a cron entry point at
+  `/api/reminders/run`)
+- **AI classification helper** — advisory CapEx/OpEx suggestions in the week
+  grid (Vercel AI SDK + AI Gateway). Clear-cut task codes echo the
+  deterministic rule with no model call; judgment calls (Manager Oversight,
+  high-hours Business Enhancements) stream a suggestion with confidence and
+  explanation. Suggestions are advisory only — they never change the stored
+  classification, and the helper hides itself entirely when no
+  `AI_GATEWAY_API_KEY` is configured
+- **Admin settings** — tolerances (max hours/day, hours-outlier threshold,
+  correction-window length), reminder templates, and the AI model string are
+  admin-configurable at `/settings` with no code change; every change is
+  audit-logged
+- **Exception-report distribution** — initiating a period close emails the
+  exception report to the managers of flagged partners and the PMs of
+  affected projects (log-only when SMTP is unconfigured); per-recipient
+  status is shown on the close console
+- **Session inactivity expiry** — sessions expire after 30 minutes of
+  inactivity
 
 ## Tech Stack
 
@@ -134,8 +155,12 @@ Optional for local development; defaults are dev-only.
 | Variable             | Purpose                          | Default                        |
 | -------------------- | -------------------------------- | ------------------------------ |
 | `BETTER_AUTH_SECRET` | Auth session signing secret      | Dev-only fallback (insecure)   |
+| `SMTP_HOST` etc.     | Reminder/distribution email delivery (`SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM`) | Unset → log-only mode |
+| `AI_GATEWAY_API_KEY` | Vercel AI Gateway key for the classification helper | Unset → helper hidden |
+| `CRON_SECRET`        | Bearer secret for the `/api/reminders/run` cron entry point | Unset → admin session required |
 
-Set a real `BETTER_AUTH_SECRET` for anything beyond local development.
+See `.env.example` for details. Set a real `BETTER_AUTH_SECRET` for anything
+beyond local development.
 
 The dev server also accepts requests from LAN IPs (`http://192.168.x.x:3000`) —
 useful when testing from another device on your network. Auth origins are
@@ -152,6 +177,7 @@ npm run test
 # Smoke tests — run `npm run seed` and `npm run dev` first, then:
 npm run smoke              # Phase 2: timesheet entry + submission scenarios
 node scripts/phase4-smoke.cjs  # Phase 4: approval workflow + period close
+node scripts/phase6-smoke.cjs  # Phase 6: settings + exception distribution
 ```
 
 Smoke tests create and clean up their own test data (a smoke employee and project).

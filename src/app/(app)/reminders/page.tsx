@@ -9,6 +9,7 @@ import {
   loadHolidayDates,
   reminderHistoryQuery,
 } from "@/lib/reminders";
+import { getSettings } from "@/lib/settings-db";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -20,21 +21,32 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { RemindersTable, type OutstandingRow } from "./reminders-client";
+import { ReminderTemplateEditor } from "./reminder-template-editor";
 
 export const metadata = { title: "Reminders" };
 
 const HISTORY_LIMIT = 50;
 
+const statusVariant: Record<
+  "sent" | "would_send" | "failed",
+  "default" | "secondary" | "destructive"
+> = {
+  sent: "default",
+  would_send: "secondary",
+  failed: "destructive",
+};
+
 export default async function RemindersPage() {
   // Server-side gate: non-admins are redirected to the dashboard (TS-019).
   await requireRole(["admin"]);
 
-  const [rows, holidays, history] = await Promise.all([
+  const [rows, holidays, history, settings] = await Promise.all([
     getOutstandingReminders(),
     loadHolidayDates(),
     reminderHistoryQuery()
       .orderBy(desc(reminderLogTable.remindedAt))
       .limit(HISTORY_LIMIT),
+    getSettings(),
   ]);
 
   const outstanding: OutstandingRow[] = rows.map((row) => ({
@@ -59,8 +71,9 @@ export default async function RemindersPage() {
         </h1>
         <p className="text-sm text-muted-foreground">
           Partners with unsubmitted timesheets whose deadline has arrived,
-          derived from the fiscal calendar and observed holidays — no scheduler,
-          in-app records only.
+          derived from the fiscal calendar and observed holidays. Sends email
+          when SMTP is configured; otherwise reminders are recorded in-app
+          only (log-only mode).
         </p>
       </section>
 
@@ -96,6 +109,19 @@ export default async function RemindersPage() {
 
       <Card className="animate-scale-in">
         <CardHeader>
+          <p className="micro-label">Reminders / Templates</p>
+          <CardTitle>Reminder email templates</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ReminderTemplateEditor
+            subject={settings.reminderSubject}
+            body={settings.reminderBody}
+          />
+        </CardContent>
+      </Card>
+
+      <Card className="animate-scale-in">
+        <CardHeader>
           <p className="micro-label">Reminders / History</p>
           <CardTitle className="flex flex-wrap items-center justify-between gap-3">
             Reminder history
@@ -119,6 +145,9 @@ export default async function RemindersPage() {
                   <TableHead>Partner</TableHead>
                   <TableHead>Week</TableHead>
                   <TableHead>Reminded by</TableHead>
+                  <TableHead>Channel</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Trigger</TableHead>
                   <TableHead>When</TableHead>
                   <TableHead>Note</TableHead>
                 </TableRow>
@@ -133,7 +162,18 @@ export default async function RemindersPage() {
                       {row.weekStartDate}
                     </TableCell>
                     <TableCell className="text-sm text-muted-foreground">
-                      {row.remindedByName}
+                      {row.remindedByName ?? "Scheduled"}
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{row.channel}</Badge>
+                    </TableCell>
+                    <TableCell>
+                      <Badge variant={statusVariant[row.status]}>
+                        {row.status.replace("_", " ")}
+                      </Badge>
+                    </TableCell>
+                    <TableCell className="font-mono text-xs text-muted-foreground">
+                      {row.trigger}
                     </TableCell>
                     <TableCell className="font-mono text-xs whitespace-nowrap">
                       {row.remindedAt.toLocaleString("en-US", {

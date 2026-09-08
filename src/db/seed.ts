@@ -7,8 +7,10 @@ import { hashPassword } from "better-auth/crypto";
 import { db } from "./index.ts";
 import {
   account as accountTable,
+  appSetting as appSettingTable,
   assignmentChange as assignmentChangeTable,
   classificationRule as classificationRuleTable,
+  distributionLog as distributionLogTable,
   favorite as favoriteTable,
   fiscalPeriod as fiscalPeriodTable,
   holiday as holidayTable,
@@ -16,6 +18,7 @@ import {
   periodClose as periodCloseTable,
   project as projectTable,
   projectAssignment as projectAssignmentTable,
+  reminderLog as reminderLogTable,
   taskCode as taskCodeTable,
   timeEntry as timeEntryTable,
   timesheet as timesheetTable,
@@ -27,6 +30,7 @@ import {
   type NewTimesheet,
   type NewTimesheetDecision,
 } from "./schema.ts";
+import { DEFAULT_SETTINGS, SETTING_KEYS } from "../lib/settings-db.ts";
 
 interface PartnerData {
   name: string;
@@ -181,6 +185,10 @@ async function seed() {
   const dataset: Dataset = JSON.parse(readFileSync(datasetPath, "utf8"));
 
   // -- 1. Wipe tables in FK-safe order --------------------------------------
+  // reminder_log/distribution_log first: their FKs to user/period_close have
+  // no cascade on every column, so parents cannot be cleared while rows exist.
+  await db.delete(reminderLogTable);
+  await db.delete(distributionLogTable);
   await db.delete(timeEntryTable);
   await db.delete(timesheetDecisionTable);
   await db.delete(timesheetTable);
@@ -1007,7 +1015,44 @@ async function seed() {
     await db.insert(favoriteTable).values(favoriteRows);
   }
 
-  // -- 11. Reconciliation ------------------------------------------------------
+  // -- 11. Default app settings (NF-012) --------------------------------------
+  // INSERT OR IGNORE: re-seeding never clobbers admin-edited values. Values
+  // derive from the same defaults the settings reader falls back to.
+  const settingRows: Array<typeof appSettingTable.$inferInsert> = [
+    {
+      key: SETTING_KEYS.maxHoursPerDay,
+      value: String(DEFAULT_SETTINGS.maxHoursPerDay),
+      updatedBy: adminId,
+    },
+    {
+      key: SETTING_KEYS.correctionWindowDays,
+      value: String(DEFAULT_SETTINGS.correctionWindowDays),
+      updatedBy: adminId,
+    },
+    {
+      key: SETTING_KEYS.hoursTolerance,
+      value: String(DEFAULT_SETTINGS.hoursTolerance),
+      updatedBy: adminId,
+    },
+    {
+      key: SETTING_KEYS.reminderSubject,
+      value: DEFAULT_SETTINGS.reminderSubject,
+      updatedBy: adminId,
+    },
+    {
+      key: SETTING_KEYS.reminderBody,
+      value: DEFAULT_SETTINGS.reminderBody,
+      updatedBy: adminId,
+    },
+    {
+      key: SETTING_KEYS.aiModel,
+      value: DEFAULT_SETTINGS.aiModel,
+      updatedBy: adminId,
+    },
+  ];
+  await db.insert(appSettingTable).values(settingRows).onConflictDoNothing();
+
+  // -- 12. Reconciliation ------------------------------------------------------
   const [userCount] = await db.select({ value: count() }).from(userTable);
   const [activeCount] = await db
     .select({ value: count() })
@@ -1039,6 +1084,9 @@ async function seed() {
   const [periodCloseCount] = await db
     .select({ value: count() })
     .from(periodCloseTable);
+  const [settingCount] = await db
+    .select({ value: count() })
+    .from(appSettingTable);
   const [entryCount] = await db.select({ value: count() }).from(timeEntryTable);
   const hoursRow = await db
     .select({
@@ -1066,6 +1114,7 @@ async function seed() {
     console.log(`  decision ${r.decision}: ${r.value}`);
   }
   console.log(`Period closes: ${periodCloseCount?.value}`);
+  console.log(`App settings: ${settingCount?.value}`);
   console.log(`Time entries: ${entryCount?.value}`);
   console.log(`Total hours: ${totalHours}`);
   console.log(

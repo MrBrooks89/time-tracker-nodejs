@@ -10,7 +10,8 @@ import {
   user as userTable,
 } from "@/db/schema";
 import { exceptionFlags, weeksOfPeriod } from "@/lib/close";
-import { HOURS_TOLERANCE } from "@/lib/config";
+import { distributionForClose } from "@/lib/close-report";
+import { getSettings } from "@/lib/settings-db";
 import { FISCAL_PERIODS, type FiscalPeriodInfo } from "@/lib/fiscal";
 import { expectedHours } from "@/lib/holidays";
 import { requireRole } from "@/lib/permissions";
@@ -85,7 +86,9 @@ type SheetState =
 async function loadCloseData(period: FiscalPeriodInfo) {
   const weeks = weeksOfPeriod(period);
 
-  const [holidayDates, closeRow] = await Promise.all([
+  // NF-012: tolerance is admin-configurable — the displayed report must flag
+  // exactly what close enforces, so it reads the same setting.
+  const [holidayDates, closeRow, { hoursTolerance }] = await Promise.all([
     db
       .select({ date: holidayTable.observedDate })
       .from(holidayTable)
@@ -100,6 +103,7 @@ async function loadCloseData(period: FiscalPeriodInfo) {
         ),
       )
       .limit(1),
+    getSettings(),
   ]);
 
   const [users, sheets] = await Promise.all([
@@ -152,7 +156,7 @@ async function loadCloseData(period: FiscalPeriodInfo) {
           totalHours,
           expectedHours: expected,
         },
-        HOURS_TOLERANCE,
+        hoursTolerance,
       );
       rows.push({
         userId: user.id,
@@ -245,6 +249,15 @@ export default async function ClosePage({
         .where(eq(userTable.id, closedById))
         .limit(1))[0]?.name ?? null)
     : null;
+
+  // TS-025: exception-report distribution log for this close (empty until a
+  // close has been initiated).
+  const distribution = close ? await distributionForClose(close.id) : [];
+  const distributionCounts = {
+    sent: distribution.filter((d) => d.status === "sent").length,
+    wouldSend: distribution.filter((d) => d.status === "would_send").length,
+    failed: distribution.filter((d) => d.status === "failed").length,
+  };
 
   return (
     <div className="flex flex-col gap-6">
@@ -389,6 +402,83 @@ export default async function ClosePage({
           )}
         </CardContent>
       </Card>
+
+      {close ? (
+        <Card className="animate-scale-in">
+          <CardHeader>
+            <p className="micro-label">Close / Distribution</p>
+            <CardTitle className="flex flex-wrap items-center justify-between gap-3">
+              Exception report distribution
+              <span className="flex flex-wrap items-center gap-2">
+                <Badge variant="secondary">
+                  {distribution.length} recipients
+                </Badge>
+                {distributionCounts.sent > 0 ? (
+                  <Badge variant="default">{distributionCounts.sent} sent</Badge>
+                ) : null}
+                {distributionCounts.wouldSend > 0 ? (
+                  <Badge variant="outline">
+                    {distributionCounts.wouldSend} queued (no SMTP)
+                  </Badge>
+                ) : null}
+                {distributionCounts.failed > 0 ? (
+                  <Badge variant="destructive">
+                    {distributionCounts.failed} failed
+                  </Badge>
+                ) : null}
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            {distribution.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                No distribution recorded — the exception report is emailed to
+                the managers of flagged partners and PMs of affected projects
+                when the close is initiated.
+              </p>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Recipient</TableHead>
+                    <TableHead>Role</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Sent</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {distribution.map((d) => (
+                    <TableRow key={d.id}>
+                      <TableCell className="text-sm font-medium">
+                        {d.recipientEmail}
+                      </TableCell>
+                      <TableCell className="text-sm capitalize text-muted-foreground">
+                        {d.recipientRole.replace(/_/g, " ")}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            d.status === "sent"
+                              ? "default"
+                              : d.status === "failed"
+                                ? "destructive"
+                                : "outline"
+                          }
+                        >
+                          {d.status === "would_send" ? "Queued" : d.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs">
+                        {formatTimestamp(d.sentAt)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
+      ) : null}
 
       <Card className="animate-scale-in">
         <CardHeader>
