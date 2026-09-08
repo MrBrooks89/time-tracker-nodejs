@@ -13,6 +13,7 @@ import {
   type SaveRow,
 } from "@/lib/actions/week";
 import { formatHours } from "@/lib/entry-validation";
+import { sumHoursByDate } from "@/lib/week-totals";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -106,6 +107,13 @@ export function WeekGrid(props: WeekGridProps) {
   const weeklyTotal = rows.reduce(
     (sum, row) => sum + Object.values(row.days).reduce((s, h) => s + h, 0),
     0,
+  );
+
+  // Per-day column totals, recomputed from rows state so they update live
+  // while editing — same pattern as weeklyTotal.
+  const dailyTotals = useMemo(
+    () => sumHoursByDate(rows, props.dates),
+    [rows, props.dates],
   );
 
   const variance: "met" | "below" | "over" =
@@ -306,6 +314,12 @@ export function WeekGrid(props: WeekGridProps) {
                 <TableHead key={date} className="text-center">
                   <div className="flex flex-col items-center gap-1">
                     <span>{dayLabel(date)}</span>
+                    <span
+                      aria-label={`Total hours ${date}`}
+                      className="font-mono text-xs tabular-nums text-muted-foreground"
+                    >
+                      {formatHours(dailyTotals[date] ?? 0)}
+                    </span>
                     {holidayByDate.has(date) ? (
                       <Badge variant="outline">{holidayByDate.get(date)}</Badge>
                     ) : null}
