@@ -1,19 +1,23 @@
 // Phase 6 (D1–D4): advisory AI classification endpoint. Deterministic-first
 // (D3): clear-cut codes resolve from the effective-dated classification
 // rules with no model call; judgment calls stream a structured suggestion
-// through the Vercel AI Gateway (model string, AI_GATEWAY_API_KEY).
-// Suggestions are advisory only (D2) — nothing here writes classification.
-// No API key → { available: false } and the client hides the helper
-// (D4/TC-305). Streaming pattern verified against the bundled docs shipped
-// with ai@7.0.93 (streamText + Output.object → createTextStreamResponse +
-// toTextStream, consumed client-side by useObject).
+// through TokenRouter's OpenAI-compatible endpoint (TOKENROUTER_API_KEY,
+// @ai-sdk/openai-compatible provider). Suggestions are advisory only (D2) —
+// nothing here writes classification. No API key → { available: false } and
+// the client hides the helper (D4/TC-305). Streaming pattern verified
+// against the bundled docs shipped with ai@7.0.93 (streamText +
+// Output.object → createTextStreamResponse + toTextStream, consumed
+// client-side by useObject).
 
 import {
   Output,
   createTextStreamResponse,
+  extractJsonMiddleware,
   streamText,
   toTextStream,
+  wrapLanguageModel,
 } from "ai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 
@@ -33,11 +37,13 @@ import { getSettings } from "@/lib/settings-db";
 // Allow streaming responses up to 30 seconds (route segment config).
 export const maxDuration = 30;
 
-// Fallback when the ai_model setting is empty. Sourced from the
-// version-matched gateway docs shipped with ai@7.0.93 / @ai-sdk/gateway —
-// a lightweight, cheap model suited to structured classification — not
-// guessed from memory.
-const DEFAULT_GATEWAY_MODEL = "openai/gpt-5.4-mini";
+// Fallback when the ai_model setting is empty. TokenRouter exposes
+// provider/model model IDs; an OpenAI-class model is the default because
+// the structured-output path (Output.object) needs JSON schema support —
+// several routed providers (Anthropic, Gemini) lack JSON mode through the
+// OpenAI-compat layer.
+const DEFAULT_ROUTER_MODEL = "openai/gpt-5.6-sol";
+const DEFAULT_TOKENROUTER_BASE_URL = "https://api.tokenrouter.com/v1";
 
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -62,8 +68,8 @@ const entryContextSchema = z
     { message: "An entry needs a task code or a non-project category." },
   );
 
-function hasGatewayKey(): boolean {
-  const key = process.env.AI_GATEWAY_API_KEY;
+function hasRouterKey(): boolean {
+  const key = process.env.TOKENROUTER_API_KEY;
   return typeof key === "string" && key.length > 0;
 }
 
@@ -75,7 +81,7 @@ export async function GET() {
   if (!sessionUser) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
-  return Response.json({ available: hasGatewayKey() });
+  return Response.json({ available: hasRouterKey() });
 }
 
 export async function POST(request: Request) {
@@ -133,7 +139,7 @@ export async function POST(request: Request) {
 
   // D4 (TC-305): no API key — the helper defers to the default rule. The
   // client probes availability first, so this path is defensive only.
-  if (!hasGatewayKey()) {
+  if (!hasRouterKey()) {
     return Response.json({
       available: false,
       deterministic: null,
@@ -152,7 +158,24 @@ export async function POST(request: Request) {
   };
 
   const { system, prompt } = buildSuggestionPrompt(context, rules);
-  const model = settings.aiModel.trim() || DEFAULT_GATEWAY_MODEL;
+  const baseURL =
+    process.env.TOKENROUTER_BASE_URL?.trim() || DEFAULT_TOKENROUTER_BASE_URL;
+  const router = createOpenAICompatible({
+    name: "tokenrouter",
+    baseURL,
+    apiKey: process.env.TOKENROUTER_API_KEY ?? "",
+    // Provider-level flag (the per-model config arg is ignored by the
+    // implementation). Without it the compat provider drops the
+    // JSON-schema response format and Output.object can't parse the
+    // free-form prose the model answers with.
+    supportsStructuredOutputs: true,
+  });
+  // extractJsonMiddleware strips markdown fences some models wrap around
+  // the JSON payload.
+  const model = wrapLanguageModel({
+    model: router.languageModel(settings.aiModel.trim() || DEFAULT_ROUTER_MODEL),
+    middleware: extractJsonMiddleware(),
+  });
 
   // D4 (TC-305): model errors degrade gracefully — the client falls back to
   // the standard rule and the entry flow is unaffected.

@@ -18,6 +18,9 @@ interface FieldConfig {
   label: string;
   hint: string;
   placeholder: string;
+  /** Defaults to "number" for non-template fields; text renders a mono
+   * string input (used by ai_model, which is a provider/model string). */
+  inputType?: "number" | "text";
 }
 
 const numericFields: FieldConfig[] = [
@@ -108,7 +111,7 @@ export function SettingsForm({ values }: { values: SettingsValues }) {
             className="font-mono text-xs leading-5"
             placeholder={config.placeholder}
           />
-        ) : isTemplate ? (
+        ) : isTemplate || config.inputType === "text" ? (
           <Input
             {...commonProps}
             type="text"
@@ -148,17 +151,18 @@ export function SettingsForm({ values }: { values: SettingsValues }) {
         <div className="flex flex-col gap-1">
           <p className="micro-label">Settings / AI Helper</p>
           <p className="text-xs text-muted-foreground">
-            Vercel AI Gateway model string (provider/model). Leave blank to use
-            the gateway default — the classification helper hides itself when
-            no API key is configured.
+            TokenRouter model string (provider/model). Leave blank to use the
+            built-in default — the classification helper hides itself when no
+            API key is configured.
           </p>
         </div>
         {renderField(
           {
             key: "ai_model",
             label: "AI model",
-            hint: "e.g. openai/gpt-4o-mini. Blank = gateway default.",
+            hint: "e.g. z-ai/glm-5.3-free. Blank = default (openai/gpt-5.6-sol).",
             placeholder: "provider/model",
+            inputType: "text",
           },
           false,
         )}
