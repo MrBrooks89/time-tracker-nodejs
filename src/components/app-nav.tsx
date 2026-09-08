@@ -11,6 +11,7 @@ import {
   FolderKanban,
   LayoutDashboard,
   ScrollText,
+  Settings,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -33,6 +34,7 @@ const iconMap: Record<string, LucideIcon> = {
   calendar: CalendarRange,
   audit: ScrollText,
   reminders: BellRing,
+  settings: Settings,
 };
 
 const baseItems: NavItem[] = [
@@ -48,12 +50,13 @@ const manageItems: NavItem[] = [
 ];
 
 // Admin-only pages (DA-009 audit viewer, FC-003/FC-008 calendar admin,
-// TS-019/020 reminders) — the nav links follow the same gate as the
-// server-side requireRole checks.
+// TS-019/020 reminders, NF-012 settings) — the nav links follow the same
+// gate as the server-side requireRole checks.
 const adminItems: NavItem[] = [
   { label: "Calendar", href: "/calendar" },
   { label: "Reminders", href: "/reminders" },
   { label: "Audit", href: "/audit" },
+  { label: "Settings", href: "/settings" },
 ];
 
 // Section 1.4: per-role nav visibility. This is COSMETIC ONLY — every page

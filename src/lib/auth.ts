@@ -44,8 +44,23 @@ export const auth = betterAuth({
     },
   },
   session: {
+    // NF-005 session inactivity expiry: 30-minute window, extended on
+    // activity. Verified against better-auth 1.7.2 source: session refresh
+    // fires when remaining lifetime <= expiresIn - updateAge
+    // (dist/api/routes/session.mjs), and the default updateAge is 24h
+    // (dist/context/create-context.mjs: 1440 * 60). With a 30-min expiresIn
+    // and that default, refresh would never fire and active users would be
+    // dropped mid-session — so updateAge is tuned to 60s, keeping active
+    // sessions rolling while idle sessions hard-expire 30 minutes after the
+    // last request.
+    expiresIn: 60 * 30,
+    updateAge: 60,
     cookieCache: {
       enabled: true,
+      // <= expiresIn: the cache cookie dies with (or before) the session, and
+      // better-auth re-checks expiresAt on every cache hit
+      // (dist/api/routes/session.mjs), so an expired session is never served
+      // from cache.
       maxAge: 5 * 60,
     },
   },

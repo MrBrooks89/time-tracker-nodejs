@@ -33,6 +33,7 @@ import type {
   TaskCodeInfo,
   WeekRow,
 } from "@/lib/week-data";
+import { AiSuggestionPanel, type AiEntryContext } from "./ai-suggestion-panel";
 
 interface GridRow extends SaveRow {
   key: string;
@@ -81,6 +82,9 @@ export function WeekGrid(props: WeekGridProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Phase 6: the AI advisory panel attaches to the row the partner is
+  // currently editing, so it never renders for every historical row at once.
+  const [activeAiRowKey, setActiveAiRowKey] = useState<string | null>(null);
 
   const initialRows = useMemo(
     () => props.rows.map((row) => ({ ...row, key: nextKey() })),
@@ -151,6 +155,7 @@ export function WeekGrid(props: WeekGridProps) {
     .map((entry) => entry.row);
 
   function updateRow(key: string, patch: Partial<GridRow>) {
+    setActiveAiRowKey(key);
     setRows((current) =>
       current.map((row) => (row.key === key ? { ...row, ...patch } : row)),
     );
@@ -163,10 +168,12 @@ export function WeekGrid(props: WeekGridProps) {
   }
 
   function addProjectRow(projectId?: string, taskCodeId?: string) {
+    const key = nextKey();
+    setActiveAiRowKey(key);
     setRows((current) => [
       ...current,
       {
-        key: nextKey(),
+        key,
         projectId: projectId ?? props.assignments[0]?.projectId ?? null,
         taskCodeId: taskCodeId ?? null,
         nonProjectCategoryId: null,
@@ -178,10 +185,12 @@ export function WeekGrid(props: WeekGridProps) {
   }
 
   function addCategoryRow(categoryId?: string) {
+    const key = nextKey();
+    setActiveAiRowKey(key);
     setRows((current) => [
       ...current,
       {
-        key: nextKey(),
+        key,
         projectId: null,
         taskCodeId: null,
         nonProjectCategoryId: categoryId ?? props.categories[0]?.id ?? null,
@@ -193,6 +202,7 @@ export function WeekGrid(props: WeekGridProps) {
   }
 
   function removeRow(key: string) {
+    if (activeAiRowKey === key) setActiveAiRowKey(null);
     setRows((current) => current.filter((row) => row.key !== key));
   }
 
@@ -337,6 +347,27 @@ export function WeekGrid(props: WeekGridProps) {
                 (a) => a.projectId === row.projectId,
               );
               const favoriteLabel = `${selectedAssignment ? `#${selectedAssignment.projectNumber} ${selectedAssignment.projectName}` : "Project"} / ${selectedTaskCode?.name ?? "task"}`;
+              // Phase 6 AI helper context: names resolved for the advisory
+              // panel, which routes client-side via the pure isJudgmentCall.
+              const selectedCategory = props.categories.find(
+                (c) => c.id === row.nonProjectCategoryId,
+              );
+              const entryDate =
+                props.dates.find((date) => (row.days[date] ?? 0) > 0) ??
+                props.dates[0];
+              const aiContext: AiEntryContext | null =
+                row.taskCodeId || row.nonProjectCategoryId
+                  ? {
+                      taskCodeName: selectedTaskCode?.name ?? null,
+                      nonProjectCategoryName: selectedCategory?.name ?? null,
+                      weeklyHours: rowTotal,
+                      projectName: selectedAssignment?.projectName ?? null,
+                      projectNumber: selectedAssignment?.projectNumber ?? null,
+                      note: row.note,
+                      weekStartDate: props.weekStartDate,
+                      entryDate,
+                    }
+                  : null;
 
               return (
                 <TableRow
@@ -474,6 +505,17 @@ export function WeekGrid(props: WeekGridProps) {
                           updateRow(row.key, { note: e.target.value || null })
                         }
                       />
+                      {editable && activeAiRowKey === row.key && aiContext ? (
+                        <AiSuggestionPanel
+                          key={row.key}
+                          context={aiContext}
+                          onApplyHandsOn={
+                            showHandsOn
+                              ? () => updateRow(row.key, { isHandsOn: true })
+                              : undefined
+                          }
+                        />
+                      ) : null}
                     </div>
                   </TableCell>
                   {props.dates.map((date) => {

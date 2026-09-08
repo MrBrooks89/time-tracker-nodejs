@@ -42,6 +42,10 @@ function isPublic(pathname: string) {
   if (isAuthEndpoint(pathname)) return true;
   if (pathname.startsWith("/_next")) return true;
   if (isFile(pathname)) return true;
+  // Cron entry point: authenticates itself (admin session or CRON_SECRET) in
+  // the route handler — an external cron has no browser session cookie, so
+  // the proxy must not redirect it to /login before that check runs.
+  if (pathname === "/api/reminders/run") return true;
   return false;
 }
 

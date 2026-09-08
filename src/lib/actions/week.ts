@@ -19,7 +19,7 @@ import {
 import { requireUser, type Role } from "@/lib/session";
 import { isReadOnlyRole } from "@/lib/permissions";
 import { recordAudit } from "@/lib/audit";
-import { MAX_HOURS_PER_DAY } from "@/lib/config";
+import { getSettings } from "@/lib/settings-db";
 import { classifyEntry, classifyNonProjectEntry, type RuleInfo } from "@/lib/classification";
 import { buildCorrectionValues, shouldMarkRestated, validateCorrection } from "@/lib/corrections";
 import { addWeeks, findWeek, isWeekStart, weekDates, weekEnterable } from "@/lib/fiscal";
@@ -280,11 +280,14 @@ export async function saveWeek(input: SaveWeekInput): Promise<ActionResult> {
     }
   }
 
+  // NF-012: the daily cap is admin-configurable — read it live so a settings
+  // change applies to the next save without a deploy.
+  const { maxHoursPerDay } = await getSettings();
   for (const [date, total] of Object.entries(dayTotals)) {
-    if (total > MAX_HOURS_PER_DAY) {
+    if (total > maxHoursPerDay) {
       return {
         ok: false,
-        error: `${date} exceeds the ${MAX_HOURS_PER_DAY}h daily maximum.`,
+        error: `${date} exceeds the ${maxHoursPerDay}h daily maximum.`,
       };
     }
   }

@@ -10,6 +10,8 @@ import { getSessionUser } from "@/lib/session";
 // query the reminders page history table uses (reminderHistoryQuery), so the
 // file can never diverge from what the admin sees. Full history is exported —
 // capped defensively so a runaway log cannot produce a multi-GB response.
+// Channel/status/trigger columns cover the D5 email modes (sent / would_send
+// / failed × manual / scheduled).
 
 const EXPORT_ROW_LIMIT = 10_000;
 
@@ -18,9 +20,13 @@ interface HistoryCsvRow {
   userName: string;
   userEmail: string;
   weekStartDate: string;
-  remindedByName: string;
+  remindedByName: string | null;
   remindedAt: Date;
   note: string | null;
+  channel: "in_app" | "email";
+  status: "sent" | "would_send" | "failed";
+  recipient: string | null;
+  trigger: "manual" | "scheduled";
 }
 
 function toCsv(rows: HistoryCsvRow[]): string {
@@ -29,6 +35,10 @@ function toCsv(rows: HistoryCsvRow[]): string {
     "email",
     "week_start",
     "reminded_by",
+    "channel",
+    "status",
+    "trigger",
+    "recipient",
     "reminded_at",
     "note",
   ];
@@ -37,7 +47,11 @@ function toCsv(rows: HistoryCsvRow[]): string {
       row.userName,
       row.userEmail,
       row.weekStartDate,
-      row.remindedByName,
+      row.remindedByName ?? "",
+      row.channel,
+      row.status,
+      row.trigger,
+      row.recipient ?? "",
       row.remindedAt.toISOString(),
       row.note ?? "",
     ]

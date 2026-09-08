@@ -86,6 +86,8 @@ export function RemindersTable({ rows }: { rows: OutstandingRow[] }) {
         window.alert(
           result.error ?? "Nothing left to remind — the list may have changed.",
         );
+      } else if (result.failed > 0) {
+        window.alert(result.error ?? "Some reminders failed to send.");
       }
       setChecked(new Set());
       router.refresh();
@@ -96,7 +98,7 @@ export function RemindersTable({ rows }: { rows: OutstandingRow[] }) {
     if (checked.size === 0) return;
     if (
       window.confirm(
-        `Record reminders for ${checked.size} outstanding timesheet${checked.size === 1 ? "" : "s"}?`,
+        `Send reminders for ${checked.size} outstanding timesheet${checked.size === 1 ? "" : "s"}?`,
       )
     ) {
       run(parseTargets(checked));
@@ -107,7 +109,7 @@ export function RemindersTable({ rows }: { rows: OutstandingRow[] }) {
     if (rows.length === 0) return;
     if (
       window.confirm(
-        `Record reminders for all ${rows.length} outstanding timesheets?`,
+        `Send reminders for all ${rows.length} outstanding timesheets?`,
       )
     ) {
       run("all");

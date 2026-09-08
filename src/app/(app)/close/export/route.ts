@@ -1,135 +1,24 @@
-import { asc, eq, inArray, sql } from "drizzle-orm";
 import { NextResponse } from "next/server";
 import * as XLSX from "xlsx";
 
-import { db } from "@/db";
-import {
-  holiday as holidayTable,
-  timeEntry as timeEntryTable,
-  timesheet as timesheetTable,
-  user as userTable,
-} from "@/db/schema";
-import {
-  exceptionFlags,
-  weeksOfPeriod,
-  type CloseSheetState,
-  type ExceptionFlag,
-} from "@/lib/close";
-import { HOURS_TOLERANCE } from "@/lib/config";
-import { FISCAL_PERIODS } from "@/lib/fiscal";
-import { expectedHours } from "@/lib/holidays";
+import type { ExceptionRow } from "@/lib/close-report";
+import { exceptionLabels, loadExceptionRows } from "@/lib/close-report";
 import { csvEscape } from "@/lib/reports";
+import { getSettings } from "@/lib/settings-db";
 import { getSessionUser } from "@/lib/session";
 
-// TS-025: pre-close exception report export. The rows are computed with the
-// exact same query shape + exceptionFlags() call as the close page's
-// loadCloseData, so the exported list can never diverge from what the admin
-// sees in the exception table.
-
-interface ExceptionExportRow {
-  name: string;
-  email: string;
-  team: string | null;
-  weekStartDate: string;
-  state: CloseSheetState;
-  totalHours: number;
-  expectedHours: number;
-  flags: ExceptionFlag[];
-}
-
-const exceptionLabels: Record<ExceptionFlag, string> = {
-  unsubmitted: "unsubmitted",
-  hours_outlier: "hours_outlier",
-};
+// TS-025: pre-close exception report export. The rows come from the shared
+// loadExceptionRows (close-report.ts) — the exact same query shape +
+// exceptionFlags() call the close page and the close-initiation distribution
+// use, so the exported list can never diverge from what the admin sees or
+// what gets emailed at close initiation. Tolerance is the admin-configured
+// setting (NF-012), not the config.ts default.
 
 function roundHours(hours: number): number {
   return Math.round(hours * 4) / 4;
 }
 
-async function loadExceptionRows(
-  fiscalYear: number,
-  periodNumber: number,
-): Promise<ExceptionExportRow[] | null> {
-  const period = FISCAL_PERIODS.find(
-    (p) =>
-      p.fiscalYear === fiscalYear && p.periodNumber === periodNumber,
-  );
-  if (!period) return null;
-
-  // Only completed periods are closeable — same eligibility as the close page.
-  const today = new Date().toISOString().slice(0, 10);
-  if (period.endDate >= today) return null;
-
-  const weeks = weeksOfPeriod(period);
-
-  const [holidayDates, users, sheets] = await Promise.all([
-    db
-      .select({ date: holidayTable.observedDate })
-      .from(holidayTable)
-      .then((rows) => rows.map((h) => h.date)),
-    db
-      .select({
-        id: userTable.id,
-        name: userTable.name,
-        email: userTable.email,
-        team: userTable.team,
-        standardWeeklyHours: userTable.standardWeeklyHours,
-      })
-      .from(userTable)
-      .where(eq(userTable.isActive, true))
-      .orderBy(asc(userTable.name)),
-    db
-      .select({
-        userId: timesheetTable.userId,
-        weekStartDate: timesheetTable.weekStartDate,
-        state: timesheetTable.state,
-        totalHours: sql<number>`coalesce(sum(${timeEntryTable.hours}), 0)`,
-      })
-      .from(timesheetTable)
-      .leftJoin(
-        timeEntryTable,
-        eq(timeEntryTable.timesheetId, timesheetTable.id),
-      )
-      .where(inArray(timesheetTable.weekStartDate, weeks))
-      .groupBy(timesheetTable.id),
-  ]);
-
-  const sheetByUserWeek = new Map(
-    sheets.map((s) => [`${s.userId}|${s.weekStartDate}`, s]),
-  );
-
-  const rows: ExceptionExportRow[] = [];
-  for (const user of users) {
-    for (const week of weeks) {
-      const sheet = sheetByUserWeek.get(`${user.id}|${week}`);
-      const state: CloseSheetState = sheet?.state ?? "not_started";
-      const totalHours = sheet ? Number(sheet.totalHours ?? 0) : 0;
-      const expected = expectedHours(
-        week,
-        user.standardWeeklyHours,
-        holidayDates,
-      );
-      const { flags } = exceptionFlags(
-        { userId: user.id, state, totalHours, expectedHours: expected },
-        HOURS_TOLERANCE,
-      );
-      if (flags.length === 0) continue;
-      rows.push({
-        name: user.name,
-        email: user.email,
-        team: user.team,
-        weekStartDate: week,
-        state,
-        totalHours,
-        expectedHours: expected,
-        flags,
-      });
-    }
-  }
-  return rows;
-}
-
-function toCsv(rows: ExceptionExportRow[]): string {
+function toCsv(rows: ExceptionRow[]): string {
   const headers = [
     "partner",
     "email",
@@ -157,7 +46,7 @@ function toCsv(rows: ExceptionExportRow[]): string {
   return [headers.join(","), ...lines].join("\r\n");
 }
 
-function toXlsxBuffer(rows: ExceptionExportRow[]): Buffer {
+function toXlsxBuffer(rows: ExceptionRow[]): Buffer {
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(
     rows.map((row) => ({
@@ -199,7 +88,12 @@ export async function GET(request: Request) {
     );
   }
 
-  const rows = await loadExceptionRows(fiscalYear, periodNumber);
+  const settings = await getSettings();
+  const rows = await loadExceptionRows(
+    fiscalYear,
+    periodNumber,
+    settings.hoursTolerance,
+  );
   if (rows === null) {
     return NextResponse.json(
       { error: "Unknown or not-yet-completed fiscal period." },

@@ -418,8 +418,11 @@ export const correctionLog = sqliteTable(
   ],
 );
 
-// In-app reminder records (TS-019/020): one row per partner reminded about an
-// unsubmitted timesheet. Hackathon scope — no email, record + export only.
+// Reminder records (TS-019/020): one row per partner reminded about an
+// unsubmitted timesheet — in-app or email. `remindedBy` is null for
+// scheduled sends (no acting admin); `trigger` + `weekStartDate` +
+// `recipient` form the idempotency marker for scheduled sends (one per
+// recipient per deadline day).
 export const reminderLog = sqliteTable(
   "reminder_log",
   {
@@ -428,17 +431,64 @@ export const reminderLog = sqliteTable(
       .notNull()
       .references(() => user.id, { onDelete: "cascade" }),
     weekStartDate: text("week_start_date").notNull(),
-    remindedBy: text("reminded_by")
-      .notNull()
-      .references(() => user.id),
+    remindedBy: text("reminded_by").references(() => user.id),
     remindedAt: integer("reminded_at", { mode: "timestamp_ms" })
       .notNull()
       .default(sql`(unixepoch() * 1000)`),
     note: text("note"),
+    channel: text("channel", {
+      enum: ["in_app", "email"],
+    })
+      .notNull()
+      .default("in_app"),
+    status: text("status", {
+      enum: ["sent", "would_send", "failed"],
+    })
+      .notNull()
+      .default("sent"),
+    recipient: text("recipient"),
+    trigger: text("trigger", {
+      enum: ["manual", "scheduled"],
+    })
+      .notNull()
+      .default("manual"),
   },
   (table) => [
     index("reminder_log_user_week_idx").on(table.userId, table.weekStartDate),
   ],
+);
+
+// Admin-configurable settings (NF-012): key/value store seeded with the
+// src/lib/config.ts defaults; values are strings coerced by the settings
+// reader (src/lib/settings-db.ts).
+export const appSetting = sqliteTable("app_setting", {
+  key: text("key").primaryKey(),
+  value: text("value").notNull(),
+  updatedBy: text("updated_by").references(() => user.id),
+  updatedAt: integer("updated_at", { mode: "timestamp_ms" })
+    .notNull()
+    .default(sql`(unixepoch() * 1000)`),
+});
+
+// Exception-report distribution (TS-025): insert-only, one row per recipient
+// per close initiation. Log-only when SMTP is unconfigured (would_send).
+export const distributionLog = sqliteTable(
+  "distribution_log",
+  {
+    id: text("id").primaryKey(),
+    closeId: text("close_id")
+      .notNull()
+      .references(() => periodClose.id, { onDelete: "cascade" }),
+    recipientEmail: text("recipient_email").notNull(),
+    recipientRole: text("recipient_role").notNull(),
+    sentAt: integer("sent_at", { mode: "timestamp_ms" })
+      .notNull()
+      .default(sql`(unixepoch() * 1000)`),
+    status: text("status", {
+      enum: ["sent", "would_send", "failed"],
+    }).notNull(),
+  },
+  (table) => [index("distribution_log_close_id_idx").on(table.closeId)],
 );
 
 export type User = typeof user.$inferSelect;
@@ -481,3 +531,7 @@ export type CorrectionLog = typeof correctionLog.$inferSelect;
 export type NewCorrectionLog = typeof correctionLog.$inferInsert;
 export type ReminderLog = typeof reminderLog.$inferSelect;
 export type NewReminderLog = typeof reminderLog.$inferInsert;
+export type AppSetting = typeof appSetting.$inferSelect;
+export type NewAppSetting = typeof appSetting.$inferInsert;
+export type DistributionLog = typeof distributionLog.$inferSelect;
+export type NewDistributionLog = typeof distributionLog.$inferInsert;

@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 
 import { db } from "@/db";
 import {
+  distributionLog as distributionLogTable,
   holiday as holidayTable,
   periodClose as periodCloseTable,
   timeEntry as timeEntryTable,
@@ -16,11 +17,17 @@ import {
   exceptionFlags,
   weeksOfPeriod,
 } from "@/lib/close";
-import { CORRECTION_WINDOW_DAYS, HOURS_TOLERANCE } from "@/lib/config";
+import {
+  distributionRecipients,
+  loadExceptionRows,
+} from "@/lib/close-report";
+import { buildExceptionReportEmail } from "@/lib/email";
+import { sendMail } from "@/lib/mailer";
 import { FISCAL_PERIODS, type FiscalPeriodInfo } from "@/lib/fiscal";
 import { expectedHours } from "@/lib/holidays";
 import { requireRole } from "@/lib/permissions";
 import { recordAudit } from "@/lib/audit";
+import { getSettings } from "@/lib/settings-db";
 
 export interface ActionResult {
   ok: boolean;
@@ -95,9 +102,82 @@ async function loadPeriodSheets(
   }));
 }
 
+// D6: distribute the exception report at close initiation. Recipients come
+// from the export-style exception set (all active partners with unsubmitted
+// OR hours_outlier flags — a superset of the hours_outlier-only set flipped
+// to in_correction), so the emailed report matches what the close page and
+// export show. Best-effort: a distribution failure never fails the close —
+// per-recipient transport failures are recorded as "failed" log rows by the
+// mailer, and a hard failure leaves the close without distribution rows
+// (visible as an empty distribution panel on the close page).
+async function distributeExceptionReport(params: {
+  closeId: string;
+  fiscalYear: number;
+  periodNumber: number;
+  tolerance: number;
+}): Promise<void> {
+  try {
+    const rows = await loadExceptionRows(
+      params.fiscalYear,
+      params.periodNumber,
+      params.tolerance,
+    );
+    if (rows === null) return;
+
+    const recipients = await distributionRecipients(rows);
+    if (recipients.length === 0) return;
+
+    const email = buildExceptionReportEmail({
+      fiscalYear: params.fiscalYear,
+      periodNumber: params.periodNumber,
+      rows,
+    });
+
+    const outcomes: Array<{
+      email: string;
+      role: string;
+      status: "sent" | "would_send" | "failed";
+    }> = [];
+    for (const recipient of recipients) {
+      const result = await sendMail({
+        to: recipient.email,
+        subject: email.subject,
+        body: email.body,
+      });
+      outcomes.push({
+        email: recipient.email,
+        role: recipient.role,
+        status: result.status,
+      });
+    }
+
+    // Sync callback + .run(): better-sqlite3 transactions reject promise-
+    // returning callbacks (same pattern as the close transaction above).
+    db.transaction((tx) => {
+      for (const outcome of outcomes) {
+        tx.insert(distributionLogTable)
+          .values({
+            id: crypto.randomUUID(),
+            closeId: params.closeId,
+            recipientEmail: outcome.email,
+            recipientRole: outcome.role,
+            sentAt: new Date(),
+            status: outcome.status,
+          })
+          .run();
+      }
+    });
+  } catch {
+    // Distribution is best-effort — never block close initiation.
+  }
+}
+
 // D5: initiate the close cycle — open the correction window and flag outlier
 // sheets for correction. Unsubmitted sheets stay as-is (they lock as-is at
 // finalize per D1); submittedAt is preserved as resubmission evidence.
+// Tolerance + window length are the admin-configured settings (NF-012), not
+// the config.ts defaults. D6: the exception report is distributed to the
+// managers of flagged partners and PMs of affected projects.
 export async function initiateClose(
   fiscalYear: number,
   periodNumber: number,
@@ -128,6 +208,7 @@ export async function initiateClose(
     return { ok: false, error: "Close has already been initiated for this period." };
   }
 
+  const settings = await getSettings();
   const holidayDates = await loadHolidayDates();
   const sheets = await loadPeriodSheets(period, holidayDates);
 
@@ -140,7 +221,7 @@ export async function initiateClose(
           totalHours: sheet.totalHours,
           expectedHours: sheet.expectedHours,
         },
-        HOURS_TOLERANCE,
+        settings.hoursTolerance,
       );
       return flags.includes("hours_outlier");
     })
@@ -149,15 +230,19 @@ export async function initiateClose(
   const windowEndsAt = correctionWindowEndsAt(
     new Date(),
     holidayDates,
-    CORRECTION_WINDOW_DAYS,
+    settings.correctionWindowDays,
   );
+
+  // The close id is generated up front so the distribution log rows (written
+  // after the async sends, outside this sync transaction) can reference it.
+  const closeId = crypto.randomUUID();
 
   // Sync callback + .run(): better-sqlite3 transactions reject promise-
   // returning callbacks, so all statements execute synchronously.
   db.transaction((tx) => {
     tx.insert(periodCloseTable)
       .values({
-        id: crypto.randomUUID(),
+        id: closeId,
         fiscalYear,
         periodNumber,
         correctionWindowEndsAt: windowEndsAt,
@@ -182,6 +267,13 @@ export async function initiateClose(
       entityId: periodEntityId(fiscalYear, periodNumber),
       newValue: `flagged=${flaggedIds.length}`,
     });
+  });
+
+  await distributeExceptionReport({
+    closeId,
+    fiscalYear,
+    periodNumber,
+    tolerance: settings.hoursTolerance,
   });
 
   revalidateClosePaths();
